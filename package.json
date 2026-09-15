@@ -1,5 +1,5 @@
 {
-  "name": "workbuddy-proxy",
+  "name": "workbuddyapi",
   "version": "1.1.0",
   "private": true,
   "description": "把 WorkBuddy（CodeBuddy）账号能力暴露为 OpenAI / Anthropic 兼容的本地反代服务（零外部依赖）",

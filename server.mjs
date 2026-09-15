@@ -94,7 +94,7 @@ const server = http.createServer(async (req, res) => {
       const sites = siteState(cfg);
       return sendJson(res, 200, {
         status: sites.some((s) => s.logged_in) ? 'ok' : 'not_logged_in',
-        service: 'workbuddy-proxy',
+        service: 'workbuddyapi',
         sites,
         logged_in: sites.some((s) => s.logged_in),
       });
@@ -127,7 +127,7 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/') {
       return sendJson(res, 200, {
-        service: 'workbuddy-proxy',
+        service: 'workbuddyapi',
         console: `http://${cfg.host}:${cfg.port}/console`,
         endpoints: ['/v1/models', '/v1/chat/completions', '/v1/messages', '/v1/messages/count_tokens', '/status', '/health', '/console'],
         sites: siteKeys(cfg),

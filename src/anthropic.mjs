@@ -196,7 +196,7 @@ export async function handleMessages(ctx) {
   }
 
   // 流式：把 OpenAI 增量翻译成 Anthropic SSE 事件序列
-  startSSE(res, { 'X-Service': 'workbuddy-proxy', 'X-Upstream-Site': site });
+  startSSE(res, { 'X-Service': 'workbuddyapi', 'X-Upstream-Site': site });
   const msgId = newId('msg');
   let blockIndex = -1; // 当前打开的内容块
   let textBlockOpened = false;

@@ -58,7 +58,7 @@ export async function handleChatCompletions(ctx) {
   }
 
   if (wantsStream) {
-    startSSE(res, { 'X-Service': 'workbuddy-proxy', 'X-Upstream-Site': site });
+    startSSE(res, { 'X-Service': 'workbuddyapi', 'X-Upstream-Site': site });
     let valid = 0;
     let finished = false;
     let upstreamUsage = null;

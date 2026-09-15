@@ -1,4 +1,4 @@
-# workbuddy-openai-proxy
+# workbuddyapi
 
 把 **WorkBuddy / CodeBuddy 账号额度（国内版 + 国际版）** 包装成本机上的
 **OpenAI 兼容 + Anthropic 兼容** 接口，供 **TraeWork / TRAE / TraeCode CLI / Cherry Studio / Cursor** 等
@@ -23,7 +23,7 @@
 ## 1. 目录结构
 
 ```
-workbuddy-openai-proxy/
+workbuddyapi/
 ├── server.mjs            # 服务入口（路由 + 鉴权 + 路径后缀容错 + 控制台挂载）
 ├── console-open.mjs      # 打开控制台窗口（服务没启动会自动拉起）
 ├── console-open.vbs      # 隐藏窗口调用上面那个（桌面快捷方式用）
