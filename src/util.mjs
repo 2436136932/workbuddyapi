@@ -66,3 +66,29 @@ export function estimateTokens(text) {
   // 粗略估算：中英混排按 3 字符 ≈ 1 token
   return Math.max(1, Math.ceil(String(text).length / 3));
 }
+
+/**
+ * 带超时的 fetch：既响应外部 signal（如客户端断开），也会在自身超时后中止。
+ * 超时或外部中止都会以 AbortError 抛出，调用方按需区分处理。
+ */
+export async function fetchWithTimeout(url, { timeoutMs = 30000, signal, ...opts } = {}) {
+  // 中止原因统一用 name='AbortError'，方便调用方用 e.name === 'AbortError' 判断"被中止/超时"。
+  const abortError = (msg) => Object.assign(new Error(msg), { name: 'AbortError' });
+  const ac = new AbortController();
+  const onOuterAbort = () => ac.abort(signal?.reason ?? abortError('aborted'));
+  if (signal) {
+    if (signal.aborted) onOuterAbort();
+    else signal.addEventListener('abort', onOuterAbort, { once: true });
+  }
+  let timer = null;
+  if (timeoutMs > 0) {
+    timer = setTimeout(() => ac.abort(abortError(`请求超时（${timeoutMs}ms）`)), timeoutMs);
+    timer.unref?.();
+  }
+  try {
+    return await fetch(url, { ...opts, signal: ac.signal });
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onOuterAbort);
+  }
+}

@@ -8,14 +8,15 @@
 > edition** — into a local, OpenAI- and Anthropic-compatible HTTP endpoint.
 > Zero dependencies, pure Node.js, loopback-only.
 
-- 依赖：仅需 **Node.js ≥ 18**，**零第三方依赖**，不用 npm install、不用 Docker。
+- 依赖：仅需 **Node.js ≥ 20.11**（`import.meta.dirname` 需要，推荐 22 LTS），**零第三方依赖**，不用 npm install、不用 Docker。
 - 隔离：配置 / 凭证 / 日志全部落在**项目目录内**；登录走官方**设备授权（OAuth）**，
   不读取 WorkBuddy 客户端的本地配置、浏览器数据或任何项目目录以外的文件。
 - 监听：默认只绑 `127.0.0.1:8788`，不对局域网/公网暴露，带本地 API Key 鉴权。
 - 多站点：国内版（`copilot.tencent.com`）与国际版（`codebuddy.ai` / `workbuddy.ai`）协议同构，
   一套服务同时代理、按模型自动路由；两边额度互不通用，各自登录。
 - 能力：流式 / 非流式、完整工具调用（tool_calls 流式聚合、多轮回灌）、
-  `developer` 角色与 `tool_choice` 归一、accessToken 临期自动刷新、剩余积分与**积分倍率**查询。
+  `developer` 角色与 `tool_choice` 归一、accessToken 临期自动刷新、剩余积分与**积分倍率**查询、
+  上游并发限制与失败退避重试、元数据接口超时兜底、来源（Origin）安全校验。
 
 ---
 
@@ -35,21 +36,28 @@ workbuddy-openai-proxy/
 ├── start-hidden.vbs      # 完全隐藏启动（桌面「启动反代」快捷方式用）
 ├── stop.cmd / status.cmd / login.cmd / login-intl.cmd / ask.cmd
 ├── config.example.json   # 配置样例（复制为 config.json 后按需修改）
+├── package.json          # 元信息与脚本（零依赖，无需 npm install；engines: Node ≥ 20.11）
 ├── LICENSE               # MIT
 ├── console/
 │   └── index.html        # 控制台界面（单文件、零依赖、中文界面）
+├── test/                 # node:test 单元测试（node --test / npm test）
+│   ├── cors.test.mjs
+│   ├── router.test.mjs
+│   ├── upstream.test.mjs
+│   └── anthropic.test.mjs
 └── src/
     ├── config.mjs        # 配置加载 + 站点表（国内版 / 国际版）
     ├── auth.mjs          # 多站点凭证存取 + 自动刷新（单飞）+ 运行中热加载
     ├── device-login.mjs  # 设备授权登录（CLI 与控制台共用）
     ├── headers.mjs       # 站点感知的上游请求头
     ├── upstream.mjs      # 上游聊天/模型/额度接口 + SSE 解析
-    ├── router.mjs        # 模型 → 站点 路由（default 别名 / 前缀 / 路由表 / 目录匹配）
+    ├── router.mjs        # 模型 → 站点 路由（default 别名 / 前缀 / 路由表 / 目录并发匹配 + 目录缓存）
     ├── openai.mjs        # /v1/models、/v1/chat/completions
     ├── anthropic.mjs     # /v1/messages、/v1/messages/count_tokens
     ├── console-api.mjs   # 控制台后端接口（状态/模型/切换/日志/用量/探测/登录/停服）
     ├── usage.mjs         # 用量统计（按天/站点/模型，落盘 usage.json）
-    ├── util.mjs          # HTTP/SSE 小工具
+    ├── cors.mjs          # 浏览器来源（Origin）判定
+    ├── util.mjs          # HTTP/SSE 小工具（含带超时的 fetch）
     └── log.mjs           # 日志（含内存环形缓冲，供控制台实时查看）
 ```
 
@@ -122,8 +130,8 @@ node ask.mjs claude-sonnet-4.6 "你好"    # 直接提问，会显示是哪个�
 | 页签 | 能做什么 |
 |---|---|
 | **状态总览** | 各站点登录态、剩余额度、可用模型数、token 到期时间；TraeWork 该填的 URL 与密钥 |
-| **模型与切换** | 列出全部站点模型（标注积分倍率、`免费` 徽章），点「设为默认」即完成切换；支持搜索、批量探测可用性 |
-| **用量统计** | 今日 / 累计调用次数、token、credit 消耗；最近 7 天柱状图；按模型排行；可一键清空 |
+| **模型与切换** | 列出全部站点模型（标注积分倍率、`免费` 徽章），点「设为默认」即完成切换；支持搜索、**按站点筛选**、只看免费、隐藏站点副本 / 未登录清单、批量探测可用性 |
+| **用量统计** | 今日 / 累计调用次数、token、credit 消耗；最近 7 天柱状图；按模型排行（数字格式化、占比条、合计行，可按消耗 / 调用 / 失败 / Token 排序）；可一键清空 |
 | **实时日志** | 最近 500 条日志滚动刷新，请求日志按状态着色 |
 | **账号登录** | 在界面里发起国内版 / 国际版设备授权登录（给出链接、自动轮询），也可退出登录 |
 | **服务** | 查看运行时长 / 版本 / 监听地址，一键停止服务 |
@@ -292,6 +300,32 @@ node status.mjs --site intl-cli  # 只看某个站点
 ```json
 { "id": "hy3", "site": "cn-cli", "credits": "x0.00 credits", "credits_multiplier": 0 }
 ```
+
+### 5.4 稳定性与安全相关配置
+
+`config.json` 中以下项都有默认值，不配也能跑，按需调整：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `timeouts.metaMs` | 20000 | 模型目录 / 额度 / 登录等**元数据接口**超时（毫秒），避免上游卡住时无限等待 |
+| `concurrency.perSite` | 8 | 每个站点允许的**最大并发上游请求数**，防止并发过高被上游限流 |
+| `retry.max` / `retry.baseMs` / `retry.maxMs` | 2 / 600 / 5000 | 对**可重试错误**（429、5xx、连接失败）的退避重试；仅在尚未拿到响应时重试，避免重复计费 |
+| `cors.allowOrigins` | `[]` | 额外放行的跨站来源白名单 |
+
+> **来源（Origin）策略**：服务只对**本机来源**（`127.0.0.1` / `localhost` / `[::1]`，以及配置里的 `host:port` 自身）回跨域头，
+> 并直接拒绝其它陌生站点的浏览器请求（防 DNS rebinding / 网页借用本机代理白嫖额度）。
+> 不带 `Origin` 的命令行 / SDK 客户端不受影响；确实需要从某个网页来源访问时，把该来源填进 `cors.allowOrigins`。
+
+### 5.5 开发与测试
+
+```powershell
+npm start          # 等价于 node server.mjs
+npm test           # node --test：运行 test/ 下的单元测试（零依赖，内置测试运行器）
+```
+
+- 站点路由、SSE 帧分类、Anthropic ↔ OpenAI 转换、来源判定、credit 提取等**纯函数都有 `node:test` 单测**，
+  改动这些逻辑后跑一遍 `npm test` 即可快速回归（当前 26 个用例）。
+- 要求 **Node ≥ 20.11**（见 `package.json` 的 `engines`；`import.meta.dirname` 依赖此版本）。
 
 ---
 

@@ -15,6 +15,7 @@ import { queryCredit } from './src/upstream.mjs';
 import { handleConsoleApi } from './src/console-api.mjs';
 import { flushUsage } from './src/usage.mjs';
 import { readJsonBody, sendJson, sendError } from './src/util.mjs';
+import { resolveCorsOrigin } from './src/cors.mjs';
 import { log, warn, error } from './src/log.mjs';
 
 const cfg = loadConfig();
@@ -60,9 +61,23 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
   const pathname = url.pathname.replace(/\/+$/, '') || '/';
 
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  // CORS：只对本机来源回跨域头，杜绝任意网页借用本机代理（DNS rebinding / 白嫖额度）
+  const cors = resolveCorsOrigin(cfg, req);
+  if (!cors.allowed) {
+    warn(`拒绝来源 ${cors.origin} 的请求（${req.method} ${pathname}）：如需放行请写入 config.json 的 cors.allowOrigins`);
+    if (req.method === 'OPTIONS') {
+      res.writeHead(403);
+      return res.end();
+    }
+    return sendError(res, 403, '不允许的跨站来源（Origin）：如需放行，请把该来源加入 config.json 的 cors.allowOrigins');
+  }
+  if (cors.origin) {
+    res.setHeader('Access-Control-Allow-Origin', cors.origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-api-key, x-console-token, anthropic-version, x-requested-with');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  }
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     return res.end();
@@ -214,6 +229,7 @@ server.requestTimeout = 0; // 流式长连接不设总时长上限
 
 server.listen(cfg.port, cfg.host, () => {
   log('WorkBuddy 反代已启动（国内版 + 国际版多站点）');
+  if (!cfg.apiKey) warn('未配置 apiKey：本机任意程序都可调用本代理，建议在 config.json 里设置 apiKey');
   log(`  控制台：http://${cfg.host}:${cfg.port}/console   ← 建议用桌面快捷方式打开`);
   log(`  监听地址：http://${cfg.host}:${cfg.port}   （仅本机可达）`);
   log(`  API Key：${cfg.apiKey}`);

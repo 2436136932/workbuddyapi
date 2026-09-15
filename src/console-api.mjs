@@ -2,7 +2,7 @@
 // 仅本机可用（服务只监听 127.0.0.1），鉴权用控制台会话 token 或 config.json 的 apiKey。
 import { siteKeys, saveConfig } from './config.mjs';
 import { getAuth, isLoggedIn } from './auth.mjs';
-import { getCatalog, mergedModels, parseMultiplier } from './router.mjs';
+import { getCatalog, mergedModels, parseMultiplier, clearCatalog } from './router.mjs';
 import { queryCredit, openChat, classifyFrame, upstreamErrorMessage } from './upstream.mjs';
 import { startLogin, pollLogin } from './device-login.mjs';
 import { usageSnapshot, resetUsage, flushUsage, recordBalance } from './usage.mjs';
@@ -219,6 +219,7 @@ export async function handleConsoleApi(ctx) {
     const r = await pollLogin(cfg, site, st.state);
     if (r.done) {
       loginStates.delete(site);
+      clearCatalog(site); // 登录成功：清该站点目录缓存，立即可见最新模型清单
       return sendJson(res, 200, { done: true, uid: r.auth.uid, nickname: r.auth.nickname, expires_at: r.auth.expiresAt });
     }
     return sendJson(res, 200, { done: false, msg: r.msg });
@@ -236,6 +237,7 @@ export async function handleConsoleApi(ctx) {
     } catch (e) {
       return sendJson(res, 500, { error: e.message });
     }
+    clearCatalog(site); // 退出登录：清该站点目录缓存
     return sendJson(res, 200, { ok: true, site });
   }
 

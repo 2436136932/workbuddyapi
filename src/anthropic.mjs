@@ -1,7 +1,6 @@
 // Anthropic 兼容路由：/v1/messages、/v1/messages/count_tokens
 // Trae 的「Claude 型自定义模型」走 Anthropic Messages 协议，这里做双向转换。
-import { openChat, aggregateFrames, classifyFrame, upstreamErrorMessage, newId } from './upstream.mjs';
-import { ensureToken } from './auth.mjs';
+import { openWithRetry, aggregateFrames, classifyFrame, upstreamErrorMessage, newId, usageCredit } from './upstream.mjs';
 import { resolveTarget } from './router.mjs';
 import { recordUsage } from './usage.mjs';
 import { startSSE, writeSSEEvent, sendJson, sendError, writeAsync, estimateTokens } from './util.mjs';
@@ -129,16 +128,7 @@ export async function handleMessages(ctx) {
   const openaiBody = toOpenAIBody({ ...body, model });
   if (openaiBody.max_tokens === undefined) openaiBody.max_tokens = cfg.defaultMaxTokens;
 
-  let up = await openChat(cfg, site, openaiBody, { signal });
-  if (!up.ok && up.status === 401) {
-    warn(`[${site}] 上游 401，强制刷新 token 后重试一次`);
-    try {
-      await ensureToken(cfg, site, { force: true });
-    } catch (e) {
-      warn(`[${site}] 刷新 token 失败：`, e.message);
-    }
-    up = await openChat(cfg, site, openaiBody, { signal });
-  }
+  const up = await openWithRetry(cfg, site, openaiBody, { signal });
   if (!up.ok) {
     requestLog({ site, model, mode: wantsStream ? 'anthropic-stream' : 'anthropic-json', status: up.status, ms: Date.now() - started, note: 'upstream_reject' });
     return sendError(res, up.status, upstreamErrorMessage(up.status, up.text, site), 'api_error');
@@ -157,7 +147,7 @@ export async function handleMessages(ctx) {
     const askedMax = Number(body.max_tokens ?? 0);
     if (!agg.content && agg.toolCallList.length === 0 && askedMax > 0 && askedMax < 1024) {
       warn(`[${site}] 空回答（finish=${agg.finishReason}，max_tokens=${askedMax}），放大到 1024 重试一次`);
-      const up2 = await openChat(cfg, site, { ...openaiBody, max_tokens: Math.max(1024, askedMax * 4) }, { signal });
+      const up2 = await openWithRetry(cfg, site, { ...openaiBody, max_tokens: Math.max(1024, askedMax * 4) }, { signal });
       if (up2.ok) {
         try {
           agg = await aggregateFrames(up2.frames);
@@ -183,7 +173,7 @@ export async function handleMessages(ctx) {
       status: 200,
       promptTokens: agg.usage?.prompt_tokens ?? estimateTokens(JSON.stringify(body.messages || [])),
       completionTokens: agg.usage?.completion_tokens ?? estimateTokens(agg.content),
-      credit: agg.usage?.credit ?? 0,
+      credit: agg.credit || usageCredit(agg.usage),
       ms: Date.now() - started,
       tools: agg.toolCallList.length,
       realModel: agg.model,
@@ -214,6 +204,7 @@ export async function handleMessages(ctx) {
   const toolBlocks = new Map(); // 上游 tool_call index → anthropic block index
   let finishReason = null;
   let usage = null;
+  let upstreamCredit = 0;
   let upstreamModel = null; // 上游实际应答的模型
   let textLen = 0;
   let closed = false;
@@ -252,6 +243,7 @@ export async function handleMessages(ctx) {
       if (parsed.kind !== 'chunk') continue;
       const chunk = parsed.obj;
       if (chunk.usage) usage = chunk.usage;
+      upstreamCredit = usageCredit(chunk.usage, chunk) || upstreamCredit;
       if (chunk.model) upstreamModel = chunk.model;
       const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : null;
       if (!choice) continue;
@@ -321,7 +313,7 @@ export async function handleMessages(ctx) {
       status: closed ? 502 : 200,
       promptTokens: usage?.prompt_tokens ?? estimateTokens(JSON.stringify(body.messages || [])),
       completionTokens: usage?.completion_tokens ?? Math.max(1, Math.ceil(textLen / 3)),
-      credit: usage?.credit ?? 0,
+      credit: upstreamCredit,
       ms: Date.now() - started,
       tools: toolBlocks.size,
       realModel: upstreamModel,

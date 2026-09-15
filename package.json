@@ -1,0 +1,19 @@
+{
+  "name": "workbuddy-proxy",
+  "version": "1.1.0",
+  "private": true,
+  "description": "把 WorkBuddy（CodeBuddy）账号能力暴露为 OpenAI / Anthropic 兼容的本地反代服务（零外部依赖）",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "status": "node status.mjs",
+    "stop": "node stop.mjs",
+    "login": "node login.mjs",
+    "ask": "node ask.mjs",
+    "test": "node --test"
+  }
+}

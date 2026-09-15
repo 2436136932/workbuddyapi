@@ -62,21 +62,32 @@ function dayOf(key = todayKey()) {
 export function recordUsage({ site, model, mode, status, promptTokens = 0, completionTokens = 0, credit = 0, ms = 0, tools = 0, realModel = null }) {
   const day = dayOf();
   const ok = status >= 200 && status < 400;
+  // 上游字段可能是字符串数值（如 credit="0.06"），统一强转成数字，避免累加时退化为字符串拼接。
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const pt = num(promptTokens);
+  const ct = num(completionTokens);
+  const cr = num(credit);
+  const cost = num(ms);
+  const tl = num(tools);
+
   day.calls += 1;
   if (!ok) day.errors += 1;
-  day.promptTokens += promptTokens || 0;
-  day.completionTokens += completionTokens || 0;
-  day.credit += credit || 0;
+  day.promptTokens += pt;
+  day.completionTokens += ct;
+  day.credit += cr;
   const key = `${site}/${model}`;
   if (!day.models[key]) day.models[key] = { site, model, real: null, calls: 0, errors: 0, promptTokens: 0, completionTokens: 0, credit: 0, ms: 0, tools: 0 };
   const m = day.models[key];
   m.calls += 1;
   if (!ok) m.errors += 1;
-  m.promptTokens += promptTokens || 0;
-  m.completionTokens += completionTokens || 0;
-  m.credit += credit || 0;
-  m.ms += ms || 0;
-  m.tools += tools || 0;
+  m.promptTokens += pt;
+  m.completionTokens += ct;
+  m.credit += cr;
+  m.ms += cost;
+  m.tools += tl;
   if (realModel) m.real = realModel; // 上游真实模型（如 auto → glm-5.2）
   scheduleSave();
 }

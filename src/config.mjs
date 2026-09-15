@@ -105,7 +105,15 @@ export function defaultConfig() {
     timeouts: {
       headerMs: 90000, // 上游首字节（响应头）超时
       idleMs: 300000, // 流中空闲超时
+      metaMs: 20000, // 模型目录 / 额度 / 登录等元数据接口超时
     },
+    // 每个站点的最大并发上游请求数（防止打爆上游限流）
+    concurrency: { perSite: 8 },
+    // 对可重试错误（429 / 5xx / 连接失败）的退避重试
+    retry: { max: 2, baseMs: 600, maxMs: 5000 },
+    // 跨站来源白名单：默认只允许本机来源（127.0.0.1 / localhost），
+    // 如需让浏览器页面从别的来源访问控制台，把该来源填进来。
+    cors: { allowOrigins: [] },
     models: DEFAULT_MODELS,
     modelAliases: {},
   };

@@ -1,7 +1,6 @@
 // OpenAI 兼容路由：/v1/models、/v1/chat/completions（流式 + 非流式，支持工具调用）
 // 多站点：请求里的 model 可写裸 ID（自动选站点），也可写 `站点/模型` 显式指定。
-import { openChat, aggregateFrames, classifyFrame, upstreamErrorMessage, newId } from './upstream.mjs';
-import { ensureToken } from './auth.mjs';
+import { openWithRetry, aggregateFrames, classifyFrame, upstreamErrorMessage, newId, usageCredit } from './upstream.mjs';
 import { resolveTarget, mergedModels, parseMultiplier } from './router.mjs';
 import { recordUsage } from './usage.mjs';
 import { startSSE, writeSSE, sendJson, sendError, estimateTokens } from './util.mjs';
@@ -31,23 +30,9 @@ export function normalizeChunk(obj, publicModel) {
       return { index: c.index ?? 0, delta, finish_reason: c.finish_reason || null };
     });
   }
-  out.usage = obj.usage !== undefined ? obj.usage : null;
+  // 标准 chunk 不含 usage，仅在上游确实给出 usage（通常是最后一帧）时才带上，避免严格客户端报错
+  if (obj.usage !== undefined && obj.usage !== null) out.usage = obj.usage;
   return out;
-}
-
-/** 发起上游请求，遇 401 自动强刷该站点 token 重试一次。 */
-async function openWithRetry(cfg, site, body, signal) {
-  let up = await openChat(cfg, site, body, { signal });
-  if (!up.ok && up.status === 401) {
-    warn(`[${site}] 上游 401，强制刷新 token 后重试一次`);
-    try {
-      await ensureToken(cfg, site, { force: true });
-    } catch (e) {
-      warn(`[${site}] 刷新 token 失败：`, e.message);
-    }
-    up = await openChat(cfg, site, body, { signal });
-  }
-  return up;
 }
 
 export async function handleChatCompletions(ctx) {
@@ -66,7 +51,7 @@ export async function handleChatCompletions(ctx) {
     upstreamBody.max_tokens = cfg.defaultMaxTokens;
   }
 
-  const up = await openWithRetry(cfg, site, upstreamBody, signal);
+  const up = await openWithRetry(cfg, site, upstreamBody, { signal });
   if (!up.ok) {
     requestLog({ site, model, mode: wantsStream ? 'stream' : 'json', status: up.status, ms: Date.now() - started, note: 'upstream_reject' });
     return sendError(res, up.status, upstreamErrorMessage(up.status, up.text, site));
@@ -77,6 +62,7 @@ export async function handleChatCompletions(ctx) {
     let valid = 0;
     let finished = false;
     let upstreamUsage = null;
+    let upstreamCredit = 0;
     let upstreamModel = null; // 上游实际应答的模型（auto 会被上游落到具体模型）
     try {
       for await (const payload of up.frames) {
@@ -87,6 +73,7 @@ export async function handleChatCompletions(ctx) {
         }
         if (parsed.kind !== 'chunk') continue;
         if (parsed.obj.usage) upstreamUsage = parsed.obj.usage;
+        upstreamCredit = usageCredit(parsed.obj.usage, parsed.obj) || upstreamCredit;
         if (parsed.obj.model) upstreamModel = parsed.obj.model;
         if (parsed.obj.choices?.[0]?.delta?.tool_calls) tools++;
         if (ttfb === null) ttfb = Date.now() - started;
@@ -119,7 +106,7 @@ export async function handleChatCompletions(ctx) {
         status: finished ? 200 : 499,
         promptTokens: upstreamUsage?.prompt_tokens ?? estimateTokens(JSON.stringify(body.messages || [])),
         completionTokens: upstreamUsage?.completion_tokens ?? estimateTokens('x'.repeat(contentChars)),
-        credit: upstreamUsage?.credit ?? 0,
+        credit: upstreamCredit,
         ms: Date.now() - started,
         tools,
         realModel: upstreamModel,
@@ -146,7 +133,7 @@ export async function handleChatCompletions(ctx) {
     const bumped = { ...upstreamBody, max_tokens: Math.max(1024, askedMax * 4) };
     delete bumped.max_completion_tokens;
     warn(`[${site}] 空回答（finish=${agg.finishReason}，max_tokens=${askedMax}），放大到 ${bumped.max_tokens} 重试一次`);
-    const up2 = await openWithRetry(cfg, site, bumped, signal);
+    const up2 = await openWithRetry(cfg, site, bumped, { signal });
     if (up2.ok) {
       try {
         agg = await aggregateFrames(up2.frames);
@@ -204,7 +191,7 @@ export async function handleChatCompletions(ctx) {
     status: 200,
     promptTokens: usage.prompt_tokens,
     completionTokens: usage.completion_tokens,
-    credit: usage.credit ?? 0,
+    credit: agg.credit || usageCredit(agg.usage),
     ms: Date.now() - started,
     tools: agg.toolCallList.length,
   });

@@ -5,7 +5,61 @@
 import crypto from 'node:crypto';
 import { getAuth, ensureToken } from './auth.mjs';
 import { chatHeaders, billingHeaders } from './headers.mjs';
+import { fetchWithTimeout } from './util.mjs';
 import { warn } from './log.mjs';
+
+// ---------- 并发限制（按站点） ----------
+class Semaphore {
+  constructor(max) {
+    this.max = Math.max(1, Number(max) || 1);
+    this.active = 0;
+    this.waiters = [];
+  }
+  async acquire() {
+    if (this.active < this.max) {
+      this.active++;
+      return;
+    }
+    await new Promise((resolve) => this.waiters.push(resolve));
+    this.active++;
+  }
+  release() {
+    this.active = Math.max(0, this.active - 1);
+    const next = this.waiters.shift();
+    if (next) next();
+  }
+}
+const limiters = new Map();
+function limiterFor(site, max) {
+  let s = limiters.get(site);
+  if (!s || s.max !== max) {
+    s = new Semaphore(max);
+    limiters.set(site, s);
+  }
+  return s;
+}
+
+// 可重试的上游状态码（限流 / 网关或服务端临时故障）
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const metaTimeout = (cfg) => cfg.timeouts?.metaMs ?? 20000;
+
+/** 从上游 usage / 帧顶层提取本次消耗的 credit（兼容多种字段名与字符串数值）。 */
+export function usageCredit(usage, frame) {
+  const pick = (o) => {
+    if (!o || typeof o !== 'object') return null;
+    for (const k of ['credit', 'credits', 'total_credits', 'credit_used', 'cost', 'amount']) {
+      if (o[k] === undefined || o[k] === null || o[k] === '') continue;
+      const n = Number(o[k]);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  };
+  const fromUsage = pick(usage);
+  if (fromUsage !== null) return fromUsage;
+  const fromFrame = pick(frame);
+  return fromFrame !== null ? fromFrame : 0;
+}
 
 /** 上游请求体改写：强制流式 + 首条必须为 system + 角色/工具选择归一 + 剔除配置中要求剔除的字段。 */
 export function prepareBody(cfg, src) {
@@ -87,6 +141,17 @@ export async function openChat(cfg, site, body, { signal } = {}) {
   await ensureToken(cfg, site);
   const payload = prepareBody(cfg, body);
 
+  // 按站点限制并发，避免并发过高打爆上游限流；整个流生命周期内占用一个名额
+  const limiter = limiterFor(site, cfg.concurrency?.perSite || 8);
+  await limiter.acquire();
+  let slotReleased = false;
+  const releaseSlot = () => {
+    if (!slotReleased) {
+      slotReleased = true;
+      limiter.release();
+    }
+  };
+
   const ac = new AbortController();
   const onOuterAbort = () => ac.abort(new Error('client closed'));
   if (signal) {
@@ -103,6 +168,7 @@ export async function openChat(cfg, site, body, { signal } = {}) {
     clearTimeout(headerTimer);
     clearTimeout(idleTimer);
     if (signal) signal.removeEventListener('abort', onOuterAbort);
+    releaseSlot();
   };
   const bumpIdle = () => {
     if (settled) return;
@@ -143,6 +209,56 @@ export async function openChat(cfg, site, body, { signal } = {}) {
       cleanup();
     },
   };
+}
+
+/**
+ * 发起上游聊天请求（并发限制 + 退避重试 + 401 刷新）：
+ *   - 连接失败 / 可重试状态码（429、5xx）自动退避重试；
+ *   - 遇 401 强制刷新该站点 token 后重试一次；
+ *   - 只在尚未拿到响应时重试，避免把已开始计费的请求重复发起。
+ * openai.mjs 与 anthropic.mjs 共用，避免各自实现一套 401 逻辑。
+ */
+export async function openWithRetry(cfg, site, body, { signal } = {}) {
+  const { max = 2, baseMs = 600, maxMs = 5000 } = cfg.retry || {};
+  const backoff = (n) => Math.min(maxMs, baseMs * 2 ** (n - 1)) + Math.floor(Math.random() * 200);
+  let attempt = 0;
+  let refreshed = false;
+  for (;;) {
+    let up = null;
+    let failure = null;
+    try {
+      up = await openChat(cfg, site, body, { signal });
+    } catch (e) {
+      failure = e;
+    }
+    if (failure) {
+      if (signal?.aborted || attempt >= max) throw failure;
+      attempt++;
+      const delay = backoff(attempt);
+      warn(`[${site}] 上游连接失败，${delay}ms 后重试（${attempt}/${max}）：${failure.message}`);
+      await sleep(delay);
+      continue;
+    }
+    if (up.ok) return up;
+    if (up.status === 401 && !refreshed) {
+      refreshed = true;
+      warn(`[${site}] 上游 401，强制刷新 token 后重试一次`);
+      try {
+        await ensureToken(cfg, site, { force: true });
+      } catch (e) {
+        warn(`[${site}] 刷新 token 失败：`, e.message);
+      }
+      continue;
+    }
+    if (RETRYABLE_STATUS.has(up.status) && attempt < max) {
+      attempt++;
+      const delay = backoff(attempt);
+      warn(`[${site}] 上游 ${up.status}，${delay}ms 后重试（${attempt}/${max}）`);
+      await sleep(delay);
+      continue;
+    }
+    return up;
+  }
 }
 
 /** 逐行解析上游 SSE，只产出 data: 载荷字符串；[DONE] / 流结束即返回。 */
@@ -209,6 +325,7 @@ export async function aggregateFrames(frames) {
     toolCalls: new Map(),
     finishReason: null,
     usage: null,
+    credit: 0,
     frames: 0,
   };
   for await (const payload of frames) {
@@ -223,6 +340,8 @@ export async function aggregateFrames(frames) {
     if (!out.model && c.model) out.model = c.model;
     if (!out.created && c.created) out.created = c.created;
     if (c.usage) out.usage = c.usage;
+    const cr = usageCredit(c.usage, c);
+    if (cr) out.credit = cr;
     const choice = Array.isArray(c.choices) ? c.choices[0] : null;
     if (!choice) continue;
     if (choice.finish_reason) out.finishReason = choice.finish_reason;
@@ -251,8 +370,9 @@ export async function fetchModels(cfg, site) {
   const siteCfg = cfg.sites[site];
   const auth = getAuth(site);
   await ensureToken(cfg, site);
-  const res = await fetch(siteCfg.apiBase + '/console/enterprises/personal/models', {
+  const res = await fetchWithTimeout(siteCfg.apiBase + '/console/enterprises/personal/models', {
     headers: { ...chatHeaders(siteCfg, auth), Accept: 'application/json' },
+    timeoutMs: metaTimeout(cfg),
   });
   const text = await res.text();
   if (res.status !== 200) throw new UpstreamError(`[${site}] 模型接口 HTTP ${res.status}：${text.slice(0, 200)}`, { status: res.status, site });
@@ -297,10 +417,11 @@ export async function queryCredit(cfg, site) {
     PackageEndTimeRangeBegin: fmt(now),
     PackageEndTimeRangeEnd: fmt(end),
   };
-  const res = await fetch(siteCfg.billingBase + '/v2/billing/meter/get-user-resource', {
+  const res = await fetchWithTimeout(siteCfg.billingBase + '/v2/billing/meter/get-user-resource', {
     method: 'POST',
     headers: billingHeaders(siteCfg, auth),
     body: JSON.stringify(body),
+    timeoutMs: metaTimeout(cfg),
   });
   const text = await res.text();
   let json;

@@ -8,6 +8,12 @@ const TTL_OK = 5 * 60 * 1000;
 const TTL_ERR = 60 * 1000;
 const catalogs = new Map(); // site → { at, ttl, models: Map, error }
 
+/** 清空目录缓存（不传 site 则清全部）。登录 / 退出后调用，立即感知最新可用模型。 */
+export function clearCatalog(site) {
+  if (site) catalogs.delete(site);
+  else catalogs.clear();
+}
+
 /** 把上游的倍率串（"x0.79 credits"）解析成数字；无法解析返回 Infinity（视为最贵）。 */
 export function parseMultiplier(credits) {
   if (!credits) return Number.POSITIVE_INFINITY;
@@ -90,12 +96,13 @@ export async function resolveTarget(cfg, requestedModel) {
   if (route && cfg.sites?.[route]) return { site: route, model, requested: raw };
 
   // 4) 目录匹配：多站点都有该模型时，选倍率最低的（未知倍率排最后）
+  //    各站点目录并发拉取（缓存命中开销极小，未命中时才真正并发请求上游）
+  const cats = await Promise.all(sites.map((s) => getCatalog(cfg, s)));
   const hits = [];
-  for (const s of sites) {
-    const cat = await getCatalog(cfg, s);
-    const info = cat.models.get(model);
+  sites.forEach((s, i) => {
+    const info = cats[i].models.get(model);
     if (info) hits.push({ site: s, mult: parseMultiplier(info.credits) });
-  }
+  });
   if (hits.length) {
     hits.sort((a, b) => a.mult - b.mult || (a.site === cfg.defaultSite ? -1 : 1));
     return { site: hits[0].site, model, requested: raw };
@@ -112,9 +119,9 @@ export async function resolveTarget(cfg, requestedModel) {
 export async function mergedModels(cfg) {
   const sites = siteKeys(cfg);
   const byId = new Map();
-  for (const s of sites) {
-    const cat = await getCatalog(cfg, s);
-    for (const m of cat.models.values()) {
+  const cats = await Promise.all(sites.map((s) => getCatalog(cfg, s)));
+  sites.forEach((s, i) => {
+    for (const m of cats[i].models.values()) {
       const mult = parseMultiplier(m.credits);
       const cur = byId.get(m.id);
       if (!cur) byId.set(m.id, { best: s, bestMult: mult, bestInfo: m, sites: [{ site: s, mult, info: m }] });
@@ -127,7 +134,7 @@ export async function mergedModels(cfg) {
         }
       }
     }
-  }
+  });
   const out = [];
   for (const [id, v] of byId) {
     // 每个条目的名称 / 倍率 / 上下文都必须取自「它自己站点」的目录信息：

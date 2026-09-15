@@ -334,6 +334,7 @@ async function api(path, opts = {}) {
 
 let STATE = null, MODELS = null, ALIASES = {}, loginSite = null;
 let USAGE = null, USAGE_SORT = 'credit';
+let MODEL_SITE = null; // 模型列表的站点筛选（null = 全部）
 
 // ---------- tabs ----------
 document.querySelectorAll('nav button').forEach((b) => {
@@ -387,6 +388,7 @@ async function loadModels() {
   ALIASES = MODELS.aliases || {};
   $('curDefault').textContent = MODELS.default_model;
   $('defmodel').textContent = `默认模型：${MODELS.default_model}`;
+  renderSiteChips();
   renderModels();
 }
 
@@ -401,10 +403,35 @@ function siteBadgeClass(site) {
   return ({ 'cn-cli': 'cn-cli', 'intl-cli': 'intl-cli', 'intl-work': 'intl-work' })[site] || 'alias';
 }
 
+function renderSiteChips() {
+  const sites = [...new Set((MODELS?.data || []).map((m) => m.site))].sort();
+  if (MODEL_SITE && !sites.includes(MODEL_SITE)) MODEL_SITE = null;
+  $('siteChips').innerHTML =
+    `<span class="chip ${MODEL_SITE ? '' : 'active'}" data-site="">全部</span>` +
+    sites.map((s) => `<span class="chip ${MODEL_SITE === s ? 'active' : ''}" data-site="${esc(s)}">${esc(s)}</span>`).join('');
+  $('siteChips').querySelectorAll('.chip').forEach((c) => {
+    c.onclick = () => {
+      MODEL_SITE = c.dataset.site || null;
+      renderSiteChips();
+      renderModels();
+    };
+  });
+}
+
 function renderModels() {
   if (!MODELS) return;
   const q = ($('modelFilter').value || '').toLowerCase();
-  let rows = MODELS.data.filter((m) => !q || (m.id + ' ' + (m.name || '')).toLowerCase().includes(q));
+  const onlyFree = $('onlyFree').checked;
+  const hideDup = $('hideDup').checked;
+  const hidePending = $('hidePending').checked;
+  const rows = MODELS.data.filter((m) => {
+    if (MODEL_SITE && m.site !== MODEL_SITE) return false;
+    if (onlyFree && !m.free) return false;
+    if (hideDup && m.alias_of) return false;
+    if (hidePending && m.pending_login) return false;
+    if (q && !(m.id + ' ' + (m.name || '')).toLowerCase().includes(q)) return false;
+    return true;
+  });
   $('modelTable').querySelector('tbody').innerHTML = rows.length ? rows.map((m) => {
     const isDef = m.id === MODELS.default_model;
     return `<tr>

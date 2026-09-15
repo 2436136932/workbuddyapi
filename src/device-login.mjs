@@ -2,6 +2,7 @@
 // 只调用官方授权接口，把拿到的 token 写进本项目目录内的 auth.<site>.json。
 import { saveAuth, hydrateFromToken } from './auth.mjs';
 import { commonHeaders } from './headers.mjs';
+import { fetchWithTimeout } from './util.mjs';
 
 const jars = new Map(); // site → Map(cookie)
 
@@ -27,7 +28,12 @@ async function api(cfg, site, method, url, { body, token } = {}) {
   if (body) headers['Content-Type'] = 'application/json';
   if (jar.size) headers.Cookie = [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
   if (token) headers.Authorization = 'Bearer ' + token;
-  const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetchWithTimeout(url, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+    timeoutMs: cfg.timeouts?.metaMs ?? 20000,
+  });
   storeCookies(site, res);
   const text = await res.text();
   let json = null;
