@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WorkBuddy 反代控制台</title>
+<style>
+  :root{
+    --bg:#0b0e14; --bg2:#0f1320;
+    --panel:#141a28; --panel2:#1b2235; --line:#26314a;
+    --fg:#e8edf7; --dim:#8a93a8; --accent:#5b8cff; --accent2:#7c5cff;
+    --ok:#34d399; --warn:#fbbf24; --bad:#fb7185;
+    --radius:14px; --shadow:0 10px 34px rgba(0,0,0,.40);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;color:var(--fg);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+    background:
+      radial-gradient(1100px 520px at 12% -8%, rgba(91,140,255,.14), transparent 60%),
+      radial-gradient(900px 480px at 110% 0%, rgba(124,92,255,.12), transparent 55%),
+      var(--bg);
+    background-attachment:fixed;
+  }
+  .wrap{max-width:1200px;margin:0 auto;padding:0 18px 56px}
+
+  /* ---------- 顶栏 ---------- */
+  header{
+    position:sticky;top:0;z-index:20;
+    display:flex;align-items:center;gap:14px;
+    padding:14px 18px;
+    background:rgba(15,19,32,.72);backdrop-filter:blur(14px);
+    border-bottom:1px solid var(--line);
+  }
+  header .logo{
+    width:30px;height:30px;border-radius:9px;flex:0 0 auto;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    box-shadow:0 4px 14px rgba(91,140,255,.5);position:relative
+  }
+  header .logo::after{content:"";position:absolute;inset:8px;border-radius:4px;background:rgba(255,255,255,.85)}
+  header h1{font-size:15px;margin:0;font-weight:700;letter-spacing:.3px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);display:inline-block;transition:.3s}
+  .dot.on{background:var(--ok);box-shadow:0 0 10px rgba(52,211,153,.8)}
+  .dot.off{background:var(--bad)}
+  .grow{flex:1}
+  .muted{color:var(--dim)}
+  .tag{font-size:12px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);padding:3px 10px;border-radius:99px}
+
+  /* ---------- 分段导航 ---------- */
+  nav{display:flex;gap:6px;padding:14px 0 4px;flex-wrap:wrap}
+  nav button{
+    background:var(--panel);border:1px solid var(--line);color:var(--dim);
+    padding:8px 15px;border-radius:99px;cursor:pointer;font-size:13px;font-weight:600;
+    transition:.18s transform,.18s background,.18s color,.18s border-color
+  }
+  nav button:hover{color:var(--fg);border-color:#33405f;transform:translateY(-1px)}
+  nav button.active{background:linear-gradient(135deg,var(--accent),var(--accent2));border-color:transparent;color:#fff;box-shadow:0 6px 18px rgba(91,140,255,.4)}
+
+  main{padding-top:14px}
+  section{animation:fade .25s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  /* ---------- 卡片 ---------- */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+  .card{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+  .card h3{margin:0 0 12px;font-size:14px;display:flex;align-items:center;gap:8px;font-weight:700}
+  .kv{display:flex;justify-content:space-between;gap:10px;padding:4px 0;font-size:13px}
+  .kv span:first-child{color:var(--dim)}
+  .code{font-family:ui-monospace,Consolas,monospace;background:#0a0d14;border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:12.5px;word-break:break-all}
+  .hint{font-size:12.5px;color:var(--dim);margin:8px 0 0;line-height:1.7}
+  .hint code{background:#0a0d14;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12px}
+
+  /* ---------- 按钮 / 输入 ---------- */
+  button{font:inherit}
+  .btn{background:var(--panel2);border:1px solid var(--line);color:var(--fg);padding:7px 13px;border-radius:10px;cursor:pointer;transition:.15s}
+  .btn:hover{border-color:#3a4665;transform:translateY(-1px)}
+  .btn:active{transform:translateY(0)}
+  .btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));border-color:transparent;color:#fff;box-shadow:0 6px 16px rgba(91,140,255,.35)}
+  .btn.danger{border-color:#5e2a2a;color:#ffb4b4;background:rgba(251,113,133,.06)}
+  .btn.danger:hover{border-color:#7a3535;background:rgba(251,113,133,.12)}
+  .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+  input,select{background:#0a0d14;border:1px solid var(--line);color:var(--fg);border-radius:10px;padding:7px 11px;font:inherit;outline:none;transition:.15s}
+  input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(91,140,255,.18)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+  /* ---------- 表格（模型列表 / 用量统计共用） ---------- */
+  .tbl-wrap{border:1px solid var(--line);border-radius:12px;overflow:auto;max-height:64vh;background:#10141f;box-shadow:inset 0 0 0 1px rgba(255,255,255,.01)}
+  table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+  table.tbl th{position:sticky;top:0;z-index:2;background:var(--panel2);color:var(--dim);font-weight:600;font-size:12.5px;white-space:nowrap;padding:10px 12px;border-bottom:1px solid var(--line);text-align:left}
+  table.tbl td{padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  table.tbl tbody tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+  table.tbl tbody tr:hover td{background:#1d273b}
+  table.tbl tfoot td{position:sticky;bottom:0;background:var(--panel);font-weight:700;border-top:2px solid var(--line);border-bottom:none}
+  table.tbl tr.grouprow td{position:sticky;top:39px;z-index:1;background:#0d1119;color:var(--dim);font-size:12px;padding:6px 12px;letter-spacing:.3px}
+  table.tbl tr.grouprow b{color:#cbd4e6;font-weight:600}
+  table.tbl td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
+  table.tbl td.act{text-align:right;white-space:nowrap}
+
+  /* 占比条 */
+  .share{display:flex;align-items:center;gap:8px;justify-content:flex-end;min-width:120px}
+  .share .track{flex:1;height:6px;border-radius:99px;background:#0a0d14;overflow:hidden;border:1px solid var(--line)}
+  .share .fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+  .share b{font-variant-numeric:tabular-nums;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--dim);min-width:34px;text-align:right}
+
+  /* badges / pills */
+  .pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11.5px;border:1px solid var(--line);color:var(--dim)}
+  .pill.free{color:#06281c;background:var(--ok);border-color:var(--ok);font-weight:700}
+  .pill.paid{color:var(--warn);border-color:#5a4413;background:rgba(251,191,36,.08)}
+  .pill.ok{color:var(--ok);border-color:#1d4a2f;background:rgba(52,211,153,.1)}
+  .pill.bad{color:var(--bad);border-color:#4a1d1d;background:rgba(251,113,133,.1)}
+  .pill.dim{border-style:dashed}
+  code.mid{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;display:inline-block;max-width:330px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
+
+  .sbadge{display:inline-block;padding:2px 10px;border-radius:99px;font-size:11.5px;border:1px solid var(--line);white-space:nowrap;color:var(--dim)}
+  .sbadge.cn-cli{color:#9fd0ff;border-color:#26486a;background:rgba(91,140,255,.1)}
+  .sbadge.intl-cli{color:#c9a8ff;border-color:#463a6b;background:rgba(124,92,255,.1)}
+  .sbadge.intl-work{color:#ffc08a;border-color:#6b4a27;background:rgba(251,191,36,.1)}
+  .sbadge.alias{color:#8ce0c4;border-color:#2c5a4a;background:rgba(52,211,153,.1)}
+
+  .chk{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--dim);cursor:pointer;user-select:none}
+  .chk input{accent-color:var(--accent);margin:0}
+  .chip{background:#0a0d14;border:1px solid var(--line);color:var(--dim);padding:5px 12px;border-radius:99px;cursor:pointer;font-size:12.5px;margin-right:6px;transition:.15s}
+  .chip:hover{border-color:#3a4665;color:var(--fg)}
+  .chip.active{background:linear-gradient(135deg,var(--accent),var(--accent2));border-color:transparent;color:#fff;font-weight:600}
+  .iconbtn{background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:3px 8px;cursor:pointer;font-size:11.5px;margin-left:6px}
+  .iconbtn:hover{color:var(--fg);border-color:#3a4665}
+  .filters{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
+  .filters .count{margin-left:auto;color:var(--dim);font-size:12.5px}
+
+  .idc{display:flex;align-items:center;gap:6px;min-width:0}
+  .hidden{display:none}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--dim);border-top-color:transparent;border-radius:50%;animation:s .8s linear infinite;vertical-align:-2px}
+  @keyframes s{to{transform:rotate(360deg)}}
+
+  /* 日志 */
+  #logs{background:#0a0d14;border:1px solid var(--line);border-radius:12px;padding:11px;height:460px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12.3px;white-space:pre-wrap}
+  .lv-warn{color:var(--warn)} .lv-error{color:var(--bad)} .lv-req{color:#9fd0ff} .lv-info{color:var(--dim)}
+
+  /* 柱状图 */
+  .bars{display:flex;gap:8px;align-items:flex-end;height:130px;margin-top:10px;padding:0 4px}
+  .bar{flex:1;background:linear-gradient(180deg,var(--accent),#2b3f8f);border-radius:6px 6px 0 0;min-height:3px;position:relative;transition:.3s}
+  .bar b{position:absolute;top:-20px;left:50%;transform:translateX(-50%);font-size:11px;color:var(--dim);font-weight:400}
+  .bar i{position:absolute;bottom:-22px;left:50%;transform:translateX(-50%);font-size:11px;color:var(--dim);font-style:normal}
+
+  .empty{padding:30px;text-align:center;color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <span class="logo"></span>
+  <span id="health" class="dot"></span>
+  <h1>WorkBuddy 反代控制台</h1>
+  <span class="muted" id="verline"></span>
+  <span class="grow"></span>
+  <span class="tag" id="defmodel"></span>
+  <button class="btn" onclick="location.reload()">刷新</button>
+</header>
+
+<nav>
+  <button data-tab="overview" class="active">状态总览</button>
+  <button data-tab="models">模型与切换</button>
+  <button data-tab="usage">用量统计</button>
+  <button data-tab="logs">实时日志</button>
+  <button data-tab="accounts">账号登录</button>
+  <button data-tab="service">服务</button>
+</nav>
+
+<main>
+  <!-- 总览 -->
+  <section id="tab-overview">
+    <div class="cards" id="siteCards"></div>
+    <div class="card" style="margin-top:14px">
+      <h3>接入 Agent（填一次即可）</h3>
+      <div class="kv"><span>API 格式</span><span>OpenAI Chat Completions 格式</span></div>
+      <div class="kv"><span>自定义请求地址</span><span></span></div>
+      <div class="code" id="fullUrl" style="margin:6px 0"></div>
+      <div class="kv"><span>API 密钥</span><span></span></div>
+      <div class="code" id="apiKey"></div>
+      <p class="hint">模型 ID 填 <b>default</b> 就能用当前默认模型；以后换模型在本控制台点一下即可，<b>不用再改 Agent</b>。<br>想固定用某个模型，也可直接填该模型 ID（如 <code>gpt-5.6-luna</code>、<code>claude-sonnet-4.6</code>）。</p>
+    </div>
+  </section>
+
+  <!-- 模型 -->
+  <section id="tab-models" class="hidden">
+    <div class="card">
+      <div class="row">
+        <b>当前默认模型</b>
+        <span id="curDefault" class="pill ok"></span>
+        <span class="grow"></span>
+        <input id="modelFilter" placeholder="搜索模型 ID / 名称" style="width:230px" oninput="renderModels()" />
+        <button class="btn" onclick="setDefault('default')">恢复为 default</button>
+        <button class="btn primary" id="probeBtn" onclick="probeVisible()">探测可见模型</button>
+      </div>
+      <div class="row filters">
+        <span class="muted" style="font-size:12.5px">站点</span>
+        <span id="siteChips"></span>
+        <label class="chk"><input type="checkbox" id="onlyFree" onchange="renderModels()" /> 只看免费</label>
+        <label class="chk"><input type="checkbox" id="hideDup" onchange="renderModels()" /> 隐藏站点副本</label>
+        <label class="chk"><input type="checkbox" id="hidePending" checked onchange="renderModels()" /> 隐藏未登录清单</label>
+        <span class="count" id="modelCount"></span>
+      </div>
+      <p class="hint">点「设为默认」即完成切换；带 <span class="pill free">免费</span> 的是实测 0 扣费模型。<br>
+      「站点副本」是同一模型在多个站点都有的 <code>站点/模型</code> 写法，需要固定走某个站点时才用；
+      倍率显示 <span class="pill dim">—</span> 表示上游未提供（国际版目录接口受限），可用「探测」逐个验活。</p>
+      <div class="tbl-wrap" style="margin-top:12px">
+        <table id="modelTable" class="tbl">
+          <thead><tr>
+            <th>模型 ID</th><th>站点</th><th>倍率</th><th>上下文</th><th>名称</th><th>探测</th><th style="text-align:right">操作</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 用量 -->
+  <section id="tab-usage" class="hidden">
+    <div class="cards" id="usageCards"></div>
+    <div class="card" style="margin-top:14px">
+      <h3>最近 7 天调用</h3>
+      <div class="bars" id="usageBars"></div>
+      <div style="height:26px"></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h3>按模型排行
+        <span class="muted" style="font-weight:400;font-size:12px;margin-left:6px">（点表头或下方标签排序）</span>
+      </h3>
+      <div class="row" style="margin:2px 0 10px">
+        <span class="muted" style="font-size:12.5px">排序</span>
+        <span class="chip active" data-sort="credit" onclick="setUsageSort('credit')">消耗 credit</span>
+        <span class="chip" data-sort="calls" onclick="setUsageSort('calls')">调用次数</span>
+        <span class="chip" data-sort="errors" onclick="setUsageSort('errors')">失败数</span>
+        <span class="chip" data-sort="tokens" onclick="setUsageSort('tokens')">Token 量</span>
+        <span class="chip" data-sort="model" onclick="setUsageSort('model')">名称</span>
+      </div>
+      <div class="tbl-wrap">
+        <table id="usageTable" class="tbl">
+          <thead><tr>
+            <th>模型</th>
+            <th>上游真实模型</th>
+            <th>站点</th>
+            <th style="text-align:right">调用</th>
+            <th style="text-align:right">失败</th>
+            <th style="text-align:right">Token</th>
+            <th style="text-align:right">消耗 credit</th>
+            <th style="text-align:right">占比</th>
+          </tr></thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="btn danger" onclick="resetUsage()">清空统计</button>
+        <span class="muted" style="font-size:12px">数据为本地累计（usage.json），重启服务不丢失。</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 日志 -->
+  <section id="tab-logs" class="hidden">
+    <div class="card">
+      <div class="row"><b>实时日志</b>
+        <span class="muted">（内存缓冲最近 500 条，自动刷新）</span>
+        <span class="grow"></span>
+        <label class="muted"><input type="checkbox" id="autoScroll" checked /> 自动滚动</label>
+        <button class="btn" onclick="document.getElementById('logs').textContent=''">清屏</button>
+      </div>
+      <div id="logs"></div>
+    </div>
+  </section>
+
+  <!-- 账号 -->
+  <section id="tab-accounts" class="hidden">
+    <div class="cards" id="accountCards"></div>
+    <div class="card hidden" id="loginBox" style="margin-top:14px">
+      <h3>完成授权</h3>
+      <p class="hint">在浏览器打开下面的链接登录（国际版可在页面直接注册），然后点「我已完成授权」。</p>
+      <div class="code" id="loginUrl"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" onclick="openLoginUrl()">打开授权链接</button>
+        <button class="btn" onclick="copyText(document.getElementById('loginUrl').textContent)">复制链接</button>
+        <button class="btn" onclick="pollLogin()">我已完成授权</button>
+        <span id="loginMsg" class="muted"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 服务 -->
+  <section id="tab-service" class="hidden">
+    <div class="card">
+      <h3>服务信息</h3>
+      <div class="kv"><span>版本 / Node</span><span id="svcVer"></span></div>
+      <div class="kv"><span>运行时长</span><span id="svcUp"></span></div>
+      <div class="kv"><span>监听</span><span id="svcHost"></span></div>
+      <div class="kv"><span>默认站点</span><span id="svcSite"></span></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn danger" onclick="stopService()">停止服务</button>
+        <span class="muted">停止后需用桌面快捷方式或 start.cmd 重新启动</span>
+      </div>
+    </div>
+  </section>
+</main>
+</div>
+
+<script>
+const TOKEN = window.__WB_TOKEN__ || '';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---------- 数字格式化 ----------
+const fmtInt = (n) => (n ?? 0).toLocaleString('en-US');
+function fmtTok(n) {
+  n = +n || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+const fmtCredit = (n) => (+n || 0).toFixed(3);
+
+async function api(path, opts = {}) {
+  const res = await fetch('/console/api' + path, {
+    ...opts,
+    headers: { 'X-Console-Token': TOKEN, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
+  return json;
+}
+
+let STATE = null, MODELS = null, ALIASES = {}, loginSite = null;
+let USAGE = null, USAGE_SORT = 'credit';
+
+// ---------- tabs ----------
+document.querySelectorAll('nav button').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
+    ['overview', 'models', 'usage', 'logs', 'accounts', 'service'].forEach((t) => {
+      $('tab-' + t).classList.toggle('hidden', t !== b.dataset.tab);
+    });
+    if (b.dataset.tab === 'usage') loadUsage();
+    if (b.dataset.tab === 'models') renderModels();
+    if (b.dataset.tab === 'accounts') renderAccounts();
+  };
+});
+
+// ---------- 状态总览 ----------
+function fmtUptime(ms) {
+  const s = Math.floor(ms / 1000), m = Math.floor(s / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  return d ? `${d}天${h % 24}小时` : h ? `${h}小时${m % 60}分` : m ? `${m}分${s % 60}秒` : `${s}秒`;
+}
+
+async function loadState() {
+  STATE = await api('/state');
+  if ($('health')) $('health').className = 'dot ' + (STATE.sites.some((s) => s.logged_in) ? 'on' : 'off');
+  $('verline').textContent = `v${STATE.version} · Node ${STATE.node}`;
+  $('defmodel').textContent = `默认模型：${STATE.default_model}`;
+  $('fullUrl').textContent = STATE.full_url;
+  $('apiKey').textContent = '（见 config.json 的 apiKey，点击此处显示）';
+  $('apiKey').onclick = () => { $('apiKey').textContent = STATE.api_key_masked + '（完整值在 config.json）'; };
+  $('svcVer').textContent = `v${STATE.version} / ${STATE.node}`;
+  $('svcUp').textContent = fmtUptime(STATE.uptime_ms);
+  $('svcHost').textContent = STATE.base_url;
+  $('svcSite').textContent = STATE.default_site;
+
+  $('siteCards').innerHTML = STATE.sites.map((s) => `
+    <div class="card">
+      <h3><span class="dot ${s.logged_in ? 'on' : 'off'}"></span>${esc(s.label)}
+        ${s.enabled ? '' : '<span class="pill">已禁用</span>'}</h3>
+      <div class="kv"><span>站点键</span><span>${esc(s.site)}</span></div>
+      <div class="kv"><span>上游</span><span>${esc(s.apiBase)}</span></div>
+      <div class="kv"><span>登录</span><span>${s.logged_in ? '已登录 ' + esc(s.uid || '') : '未登录'}</span></div>
+      ${s.nickname ? `<div class="kv"><span>昵称</span><span>${esc(s.nickname)}</span></div>` : ''}
+      <div class="kv"><span>剩余额度</span><span>${s.credit !== undefined ? '<b>' + s.credit + '</b> credits' : (s.credit_error ? '<span class="pill bad">查询失败</span>' : '—')}</span></div>
+      <div class="kv"><span>可用模型</span><span>${s.model_count} 个${s.catalog_source === 'seed' ? '（内置清单）' : ''}</span></div>
+      <div class="kv"><span>token 到期</span><span>${s.token_expires_at ? new Date(s.token_expires_at).toLocaleString() : '—'}</span></div>
+    </div>`).join('');
+}
+
+// ---------- 模型 ----------
+async function loadModels() {
+  MODELS = await api('/models');
+  ALIASES = MODELS.aliases || {};
+  $('curDefault').textContent = MODELS.default_model;
+  $('defmodel').textContent = `默认模型：${MODELS.default_model}`;
+  renderModels();
+}
+
+function multText(m) {
+  if (m.free) return '<span class="pill free">免费 x0.00</span>';
+  if (m.credits) return `<span class="pill paid">${esc(m.credits)}</span>`;
+  if (m.multiplier !== null) return `<span class="pill paid">x${m.multiplier}</span>`;
+  return '<span class="pill">—</span>';
+}
+
+function siteBadgeClass(site) {
+  return ({ 'cn-cli': 'cn-cli', 'intl-cli': 'intl-cli', 'intl-work': 'intl-work' })[site] || 'alias';
+}
+
+function renderModels() {
+  if (!MODELS) return;
+  const q = ($('modelFilter').value || '').toLowerCase();
+  let rows = MODELS.data.filter((m) => !q || (m.id + ' ' + (m.name || '')).toLowerCase().includes(q));
+  $('modelTable').querySelector('tbody').innerHTML = rows.length ? rows.map((m) => {
+    const isDef = m.id === MODELS.default_model;
+    return `<tr>
+      <td><code>${esc(m.id)}</code>${m.alias_of ? ` <span class="pill">→${esc(m.alias_of)}</span>` : ''}${m.pending_login ? ' <span class="pill">未登录</span>' : ''}</td>
+      <td><span class="sbadge ${siteBadgeClass(m.site)}">${esc(m.site)}</span></td>
+      <td>${multText(m)}</td>
+      <td>${m.context ? Math.round(m.context / 1000) + 'k' : '—'}</td>
+      <td class="muted">${esc(m.name || '')}</td>
+      <td class="probe-cell" data-id="${esc(m.id)}" data-site="${esc(m.site)}">—</td>
+      <td>${isDef ? '<span class="pill ok">当前默认</span>' : `<button class="btn" onclick="setDefault('${esc(m.id)}','${esc(m.site)}')">设为默认</button>`}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" class="empty">没有匹配的模型</td></tr>';
+  $('modelCount').textContent = `${rows.length} 个模型`;
+}
+
+async function setDefault(model, site) {
+  const r = await api('/default-model', { method: 'POST', body: { model, site } });
+  $('curDefault').textContent = r.default_model;
+  $('defmodel').textContent = `默认模型：${r.default_model}`;
+  await loadModels();
+}
+
+async function probeVisible() {
+  const q = ($('modelFilter').value || '').toLowerCase();
+  const rows = MODELS.data.filter((m) => !q || (m.id + ' ' + (m.name || '')).toLowerCase().includes(q)).slice(0, 40);
+  const targets = rows.map((m) => {
+    const [site, model] = m.id.includes('/') && !m.alias_of ? m.id.split('/') : [m.site, m.alias_of || m.id];
+    return { site, model };
+  });
+  $('probeBtn').disabled = true;
+  $('probeBtn').innerHTML = '<span class="spin"></span> 探测中…';
+  try {
+    const r = await api('/probe', { method: 'POST', body: { targets } });
+    for (const x of r.results) {
+      const cell = document.querySelector(`.probe-cell[data-id="${CSS.escape(x.model)}"][data-site="${CSS.escape(x.site)}"]`)
+        || document.querySelector(`.probe-cell[data-id="${CSS.escape(x.site + '/' + x.model)}"]`);
+      if (cell) cell.innerHTML = x.ok ? '<span class="pill ok">可用</span>' : `<span class="pill bad">${x.status || 'ERR'}</span>`;
+    }
+  } finally {
+    $('probeBtn').disabled = false;
+    $('probeBtn').textContent = '探测可见模型';
+  }
+}
+
+// ---------- 用量 ----------
+async function loadUsage() {
+  USAGE = await api('/usage');
+  const u = USAGE;
+  const t = u.today;
+  $('usageCards').innerHTML = `
+    <div class="card"><h3>今日</h3>
+      <div class="kv"><span>调用次数</span><span><b>${fmtInt(t.calls)}</b>（失败 ${fmtInt(t.errors)}）</span></div>
+      <div class="kv"><span>输入 / 输出 token</span><span>${fmtTok(t.promptTokens)} / ${fmtTok(t.completionTokens)}</span></div>
+      <div class="kv"><span>消耗 credit</span><span>${fmtCredit(t.credit)}</span></div>
+    </div>
+    <div class="card"><h3>累计（自 ${u.since}）</h3>
+      <div class="kv"><span>调用次数</span><span><b>${fmtInt(u.totals.calls)}</b>（失败 ${fmtInt(u.totals.errors)}）</span></div>
+      <div class="kv"><span>输入 / 输出 token</span><span>${fmtTok(u.totals.promptTokens)} / ${fmtTok(u.totals.completionTokens)}</span></div>
+      <div class="kv"><span>消耗 credit</span><span>${fmtCredit(u.totals.credit)}</span></div>
+    </div>`;
+  const max = Math.max(1, ...u.recent.map((d) => d.calls));
+  $('usageBars').innerHTML = u.recent.map((d) => `
+    <div class="bar" style="height:${Math.max(3, (d.calls / max) * 100)}%" title="${d.date} 调用 ${d.calls} 次 / ${fmtCredit(d.credit)} credit">
+      <b>${d.calls}</b><i>${d.date.slice(5)}</i></div>`).join('');
+  renderUsageTable();
+}
+
+function setUsageSort(key) {
+  USAGE_SORT = key;
+  document.querySelectorAll('.chip[data-sort]').forEach((c) => c.classList.toggle('active', c.dataset.sort === key));
+  renderUsageTable();
+}
+
+function renderUsageTable() {
+  const u = USAGE;
+  if (!u) return;
+  const list = (u.byModel || []).slice();
+  const tok = (m) => (m.promptTokens || 0) + (m.completionTokens || 0);
+  const cmp = {
+    credit: (a, b) => (b.credit || 0) - (a.credit || 0),
+    calls: (a, b) => (b.calls || 0) - (a.calls || 0),
+    errors: (a, b) => (b.errors || 0) - (a.errors || 0),
+    tokens: (a, b) => tok(b) - tok(a),
+    model: (a, b) => String(a.model).localeCompare(String(b.model), 'zh'),
+  }[USAGE_SORT] || ((a, b) => (b.credit || 0) - (a.credit || 0));
+  list.sort(cmp);
+
+  const totalCredit = list.reduce((s, m) => s + (+m.credit || 0), 0);
+  const totalCalls = list.reduce((s, m) => s + (m.calls || 0), 0);
+  const totalErrors = list.reduce((s, m) => s + (m.errors || 0), 0);
+  const totalTok = list.reduce((s, m) => s + tok(m), 0);
+
+  const tbody = $('usageTable').querySelector('tbody');
+  const tfoot = $('usageTable').querySelector('tfoot');
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无数据，调用几次后这里会按模型汇总</td></tr>';
+    tfoot.innerHTML = '';
+    return;
+  }
+  tbody.innerHTML = list.map((m) => {
+    const pct = totalCredit ? ((+m.credit || 0) / totalCredit) * 100 : 0;
+    return `<tr>
+      <td><code>${esc(m.model)}</code></td>
+      <td>${m.real && m.real !== m.model ? `<code>${esc(m.real)}</code>` : '<span class="muted">—</span>'}</td>
+      <td><span class="sbadge ${siteBadgeClass(m.site)}">${esc(m.site)}</span></td>
+      <td class="num">${fmtInt(m.calls)}</td>
+      <td class="num">${m.errors ? `<span class="pill bad">${fmtInt(m.errors)}</span>` : fmtInt(m.errors || 0)}</td>
+      <td class="num">${fmtTok(tok(m))}</td>
+      <td class="num">${fmtCredit(m.credit)}</td>
+      <td><div class="share"><span class="track"><span class="fill" style="width:${pct.toFixed(1)}%"></span></span><b>${pct.toFixed(1)}%</b></div></td>
+    </tr>`;
+  }).join('');
+  tfoot.innerHTML = `<tr>
+    <td>合计（${list.length} 个模型）</td>
+    <td></td><td></td>
+    <td class="num">${fmtInt(totalCalls)}</td>
+    <td class="num">${fmtInt(totalErrors)}</td>
+    <td class="num">${fmtTok(totalTok)}</td>
+    <td class="num">${fmtCredit(totalCredit)}</td>
+    <td class="num">100%</td>
+  </tr>`;
+}
+
+async function resetUsage() {
+  if (!confirm('确定清空用量统计？')) return;
+  await api('/usage/reset', { method: 'POST' });
+  loadUsage();
+}
+
+// ---------- 日志 ----------
+let lastSeq = 0;
+async function pollLogs() {
+  try {
+    const r = await api('/logs?after=' + lastSeq);
+    lastSeq = r.lastSeq;
+    if (r.list.length) {
+      const box = $('logs');
+      box.insertAdjacentHTML('beforeend', r.list.map((l) =>
+        `<div class="lv-${esc(l.level)}">${esc(l.time)} [${esc(l.level.toUpperCase())}] ${esc(l.text)}</div>`).join(''));
+      if ($('autoScroll').checked) box.scrollTop = box.scrollHeight;
+    }
+  } catch { /* 忽略 */ }
+}
+
+// ---------- 账号 ----------
+function renderAccounts() {
+  if (!STATE) return;
+  $('accountCards').innerHTML = STATE.sites.map((s) => `
+    <div class="card">
+      <h3><span class="dot ${s.logged_in ? 'on' : 'off'}"></span>${esc(s.label)}</h3>
+      <div class="kv"><span>站点键</span><span>${esc(s.site)}</span></div>
+      <div class="kv"><span>状态</span><span>${s.logged_in ? '已登录 ' + esc(s.uid || '') : '未登录'}</span></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" onclick="startLogin('${esc(s.site)}')">${s.logged_in ? '重新登录' : '开始登录'}</button>
+        ${s.logged_in ? `<button class="btn danger" onclick="logout('${esc(s.site)}')">退出登录</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+async function startLogin(site) {
+  loginSite = site;
+  const r = await api('/login/start', { method: 'POST', body: { site } });
+  $('loginBox').classList.remove('hidden');
+  $('loginUrl').textContent = r.authUrl;
+  $('loginMsg').textContent = '等待授权…';
+  openLoginUrl();
+  pollLogin();
+}
+
+function openLoginUrl() { window.open($('loginUrl').textContent, '_blank'); }
+
+async function pollLogin() {
+  if (!loginSite) return;
+  try {
+    const r = await api('/login/poll?site=' + encodeURIComponent(loginSite));
+    if (r.done) {
+      $('loginMsg').innerHTML = `<span class="pill ok">登录成功</span> ${esc(r.uid || '')} ${esc(r.nickname || '')}`;
+      await loadState();
+      renderAccounts();
+      return;
+    }
+    $('loginMsg').textContent = '等待授权…（' + String(r.msg || '').slice(0, 60) + '）';
+  } catch (e) {
+    $('loginMsg').innerHTML = `<span class="pill bad">${esc(e.message)}</span>`;
+    return;
+  }
+  setTimeout(pollLogin, 3000);
+}
+
+async function logout(site) {
+  if (!confirm(`确定退出 ${site} 的登录？（只删除本项目内的凭证文件）`)) return;
+  await api('/login/logout', { method: 'POST', body: { site } });
+  await loadState();
+  renderAccounts();
+}
+
+// ---------- 服务 ----------
+async function stopService() {
+  if (!confirm('确定停止反代服务？Agent 会立刻连不上。')) return;
+  try { await api('/service/stop', { method: 'POST' }); } catch { /* 连接会被切断 */ }
+  document.body.innerHTML = '<div style="padding:40px;font:16px/1.8 sans-serif;color:#e8edf7;background:#0b0e14;height:100vh">' +
+    '<h2>服务已停止</h2><p>双击桌面快捷方式「启动 WorkBuddy 反代」或运行 start.cmd 可重新启动。</p></div>';
+}
+
+function copyText(t) { navigator.clipboard?.writeText(t); }
+
+// ---------- 启动 ----------
+(async () => {
+  await loadState();
+  await loadModels();
+  renderAccounts();
+  pollLogs();
+  setInterval(pollLogs, 2000);
+  setInterval(loadState, 20000);
+})();
+</script>
+</body>
+</html>

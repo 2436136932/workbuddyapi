@@ -1,0 +1,19 @@
+# 本地凭证与个人配置（切勿提交）
+auth.json
+auth.*.json
+config.json
+usage.json
+.login-state.json
+.gh-token
+# DeepSeek 官方站点凭证（token 明文，切勿提交）
+.ds-token
+auth.deepseek.json
+node_modules/
+*.log
+_ref/
+
+# 与本项目无关的其他目录（各自独立，不与本仓库混合提交）
+zcode-proxy/
+
+# AI 工具元数据与工作记忆
+.codebuddy/
