@@ -101,7 +101,7 @@ node server.mjs          # 前台运行（日志直接打在终端，Ctrl+C 停�
 ```
 控制台：http://127.0.0.1:8788/console   ← 建议用桌面快捷方式打开
 监听地址：http://127.0.0.1:8788   （仅本机可达）
-API Key：<你的本地 API Key>（首次启动自动生成）
+API Key：123456（默认值；首次自动生成的 config.json 里即是它，可在 `apiKey` 改）
 默认站点/模型：cn-cli / deepseek-v4-pro
 站点 cn-cli    已登录 uid=xxxxxxxx…   https://copilot.tencent.com
 站点 intl-cli  已登录 uid=xxxxxxxx…   https://www.codebuddy.ai

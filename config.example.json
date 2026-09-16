@@ -1,7 +1,7 @@
 {
   "host": "127.0.0.1",
   "port": 8788,
-  "apiKey": "请填你自己的本地密钥（仅本机使用，随便一串即可）",
+  "apiKey": "123456",
   "defaultSite": "cn-cli",
   "defaultModel": "deepseek-v4-pro",
   "defaultMaxTokens": 16384,

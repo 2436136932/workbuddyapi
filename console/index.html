@@ -176,7 +176,7 @@
       <div class="kv"><span>API 格式</span><span>OpenAI Chat Completions 格式</span></div>
       <div class="kv"><span>自定义请求地址</span><span></span></div>
       <div class="code" id="fullUrl" style="margin:6px 0"></div>
-      <div class="kv"><span>API 密钥</span><span></span></div>
+      <div class="kv"><span>API 密钥</span><span><button class="btn" onclick="copyText(document.getElementById('apiKey').textContent)">复制</button></span></div>
       <div class="code" id="apiKey"></div>
       <p class="hint">模型 ID 填 <b>default</b> 就能用当前默认模型；以后换模型在本控制台点一下即可，<b>不用再改 Agent</b>。<br>想固定用某个模型，也可直接填该模型 ID（如 <code>gpt-5.6-luna</code>、<code>claude-sonnet-4.6</code>）。</p>
     </div>
@@ -361,8 +361,10 @@ async function loadState() {
   $('verline').textContent = `v${STATE.version} · Node ${STATE.node}`;
   $('defmodel').textContent = `默认模型：${STATE.default_model}`;
   $('fullUrl').textContent = STATE.full_url;
-  $('apiKey').textContent = '（见 config.json 的 apiKey，点击此处显示）';
-  $('apiKey').onclick = () => { $('apiKey').textContent = STATE.api_key_masked + '（完整值在 config.json）'; };
+  $('apiKey').textContent = STATE.api_key || STATE.api_key_masked || '';
+  $('apiKey').title = '点击复制';
+  $('apiKey').style.cursor = 'copy';
+  $('apiKey').onclick = () => copyText(STATE.api_key || '');
   $('svcVer').textContent = `v${STATE.version} / ${STATE.node}`;
   $('svcUp').textContent = fmtUptime(STATE.uptime_ms);
   $('svcHost').textContent = STATE.base_url;

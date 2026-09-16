@@ -100,6 +100,7 @@ export async function handleConsoleApi(ctx) {
       platform: process.platform,
       default_site: cfg.defaultSite,
       default_model: cfg.defaultModel,
+      api_key: cfg.apiKey,
       api_key_masked: maskKey(cfg.apiKey),
       base_url: `http://${cfg.host}:${cfg.port}/v1`,
       full_url: `http://${cfg.host}:${cfg.port}/v1/chat/completions`,

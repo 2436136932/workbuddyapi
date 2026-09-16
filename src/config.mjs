@@ -1,7 +1,6 @@
 // 配置与路径：所有文件（配置、凭证、日志）一律限定在本项目目录内，绝不读写项目外文件。
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
 export const ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -90,7 +89,7 @@ export function defaultConfig() {
   return {
     host: '127.0.0.1', // 仅本机可访问，不对局域网暴露
     port: 8788,
-    apiKey: 'sk-wb-' + crypto.randomBytes(12).toString('hex'),
+    apiKey: '123456', // 本地 API Key（仅本机使用）；如需更安全请改成自己的随机串
     defaultSite: 'cn-cli',
     defaultModel: 'deepseek-v4-pro',
     defaultMaxTokens: 16384,
