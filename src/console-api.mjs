@@ -1,9 +1,11 @@
-// 控制台后端 API：状态总览 / 模型清单 / 一键切换默认模型 / 日志 / 用量 / 探测 / 登录 / 停服
+// 控制台后端 API：状态总览 / 模型清单 / 一键切换默认模型 / 一键签到 / 日志 / 用量 / 探测 / 登录 / 停服
 // 仅本机可用（服务只监听 127.0.0.1），鉴权用控制台会话 token 或 config.json 的 apiKey。
-import { siteKeys, saveConfig } from './config.mjs';
+import { siteKeys, saveConfig, siteGroups, slotGroupOf, cloneSiteSlot, removeSiteSlot } from './config.mjs';
 import { getAuth, isLoggedIn } from './auth.mjs';
 import { getCatalog, mergedModels, parseMultiplier, clearCatalog } from './router.mjs';
 import { queryCredit, openChat, classifyFrame, upstreamErrorMessage } from './upstream.mjs';
+import { checkinStatusAll, checkinAll, runGrowthAll, CheckinError } from './checkin.mjs';
+import { autoCheckinStatus, setAutoCheckin } from './auto-checkin.mjs';
 import { startLogin, pollLogin } from './device-login.mjs';
 import { usageSnapshot, resetUsage, flushUsage, recordBalance } from './usage.mjs';
 import { recentLogs } from './log.mjs';
@@ -26,6 +28,9 @@ async function siteSummary(cfg, site) {
     label: s.label,
     apiBase: s.apiBase,
     enabled: s.enabled !== false,
+    clone_of: s.cloneOf || null,
+    group: slotGroupOf(s, site),
+    is_default: cfg.defaultSite === site,
     logged_in: isLoggedIn(site),
     uid: a.uid || null,
     nickname: a.nickname || null,
@@ -105,6 +110,7 @@ export async function handleConsoleApi(ctx) {
       base_url: `http://${cfg.host}:${cfg.port}/v1`,
       full_url: `http://${cfg.host}:${cfg.port}/v1/chat/completions`,
       sites,
+      groups: siteGroups(cfg),
     });
   }
 
@@ -173,6 +179,40 @@ export async function handleConsoleApi(ctx) {
     return sendJson(res, 200, { ok: true, aliases: cfg.modelAliases });
   }
 
+  // ---- 一键签到 ----
+  if (p === '/checkin/status' && method === 'GET') {
+    const sites = url.searchParams.getAll('site').filter(Boolean);
+    return sendJson(res, 200, await checkinStatusAll(cfg, sites.length ? sites : undefined));
+  }
+  if (p === '/checkin/claim' && method === 'POST') {
+    const body = ctx.body || {};
+    const sites = Array.isArray(body.sites) ? body.sites : (body.site ? [body.site] : undefined);
+    try {
+      const r = await checkinAll(cfg, sites);
+      const { recordCheckinRun } = await import('./auto-checkin.mjs');
+      recordCheckinRun(r, { trigger: 'manual' });
+      return sendJson(res, 200, r);
+    } catch (e) {
+      const status = e instanceof CheckinError ? (e.status || 500) : 500;
+      return sendJson(res, status, { ok: false, error: e.message });
+    }
+  }
+  if (p === '/checkin/growth' && method === 'POST') {
+    const body = ctx.body || {};
+    const sites = Array.isArray(body.sites) ? body.sites : (body.site ? [body.site] : undefined);
+    const r = await runGrowthAll(cfg, sites, { includeCheckin: body.includeCheckin !== false });
+    const { recordCheckinRun } = await import('./auto-checkin.mjs');
+    recordCheckinRun({ claimed: r.results.reduce((n, x) => n + (x.creditsGained || 0), 0), count: r.count, results: r.results }, { trigger: 'growth' });
+    return sendJson(res, 200, r);
+  }
+  if (p === '/checkin/auto' && method === 'GET') {
+    return sendJson(res, 200, autoCheckinStatus());
+  }
+  if (p === '/checkin/auto' && method === 'POST') {
+    const body = ctx.body || {};
+    return sendJson(res, 200, setAutoCheckin(body));
+  }
+
   // ---- 日志 ----
   if (p === '/logs' && method === 'GET') {
     const after = Number(url.searchParams.get('after') || 0);
@@ -204,7 +244,7 @@ export async function handleConsoleApi(ctx) {
     return sendJson(res, 200, { ok: true, count: results.length, results });
   }
 
-  // ---- 账号登录（设备授权） ----
+  // ---- 账号登录（设备授权，按槽位键隔离：每个账号槽位独立走一遍授权） ----
   if (p === '/login/start' && method === 'POST') {
     const body = ctx.body || {};
     const site = String(body.site || cfg.defaultSite);
@@ -248,6 +288,41 @@ export async function handleConsoleApi(ctx) {
     flushUsage();
     setTimeout(() => process.exit(0), 200);
     return;
+  }
+
+  // ---- 同源多账号（账号池）：克隆槽位 / 删除槽位 / 切换默认槽位 ----
+  if (p === '/sites' && method === 'POST') {
+    const body = ctx.body || {};
+    try {
+      const r = cloneSiteSlot(cfg, String(body.from || ''), String(body.key || ''), String(body.label || ''));
+      clearCatalog(); // 新槽位上线：清目录缓存，保证模型列表/路由即时可见
+      const info = await siteSummary(cfg, r.key);
+      return sendJson(res, 200, { ok: true, ...r, info, groups: siteGroups(cfg) });
+    } catch (e) {
+      return sendJson(res, e.status || 400, { error: e.message });
+    }
+  }
+  if (p === '/sites/remove' && method === 'POST') {
+    const body = ctx.body || {};
+    const key = String(body.site || body.key || '');
+    try {
+      const r = removeSiteSlot(cfg, key);
+      clearCatalog(key); // 槽位下线：清该槽位目录缓存
+      const { authPathFor } = await import('./config.mjs');
+      const fs = await import('node:fs');
+      try { fs.rmSync(authPathFor(key), { force: true }); } catch { /* 凭证删不掉不阻塞 */ }
+      return sendJson(res, 200, { ok: true, ...r, groups: siteGroups(cfg) });
+    } catch (e) {
+      return sendJson(res, e.status || 400, { error: e.message });
+    }
+  }
+  if (p === '/sites/default' && method === 'POST') {
+    const body = ctx.body || {};
+    const key = String(body.site || body.key || '');
+    if (!cfg.sites?.[key]) return sendJson(res, 400, { error: `未知站点 ${key}` });
+    cfg.defaultSite = key; // 切默认账号：反代裸模型名/default 别名即走该账号；重启不丢失
+    saveConfig(cfg);
+    return sendJson(res, 200, { ok: true, default_site: cfg.defaultSite, groups: siteGroups(cfg) });
   }
 
   return sendJson(res, 404, { error: `未知控制台接口 ${method} ${p}` });

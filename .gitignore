@@ -3,6 +3,8 @@ auth.json
 auth.*.json
 config.json
 usage.json
+checkin.json
+checkin.log
 .login-state.json
 .gh-token
 # DeepSeek 官方站点凭证（token 明文，切勿提交）

@@ -11,12 +11,21 @@ export const paths = {
   loginState: path.join(ROOT, '.login-state.json'),
 };
 
-/** 单个站点的凭证文件：auth.<site>.json */
+/** 单个站点的凭证文件：auth.<site>.json（多账号即多槽位，各自一份，天然隔离）。 */
 export function authPathFor(site) {
-  return path.join(ROOT, `auth.${site}.json`);
+  const key = String(site || '');
+  // 槽位键白名单（与 config.assertSlotKey 同规则，另兼容历史三站键名）：防路径穿越
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/.test(key)) {
+    throw Object.assign(new Error(`非法站点键：${site}`), { status: 400 });
+  }
+  return path.join(ROOT, `auth.${key}.json`);
 }
 
 // 上游站点预设：国内版与国际版协议同构，仅域名 / 身份头不同。
+// 同源多账号：新增账号槽位就是完整克隆某站点的配置（apiBase 等完全一致），
+// 凭证按槽位键独立存放（auth.<槽位>.json），登录/刷新/签到/额度全部按槽位键隔离。
+// 约定：槽位键合法字符 ^[a-z0-9][a-z0-9-]{0,31}$（防路径穿越）；
+// `cloneOf` 指向被克隆的来源站，用于控制台按组展示与删除保护。
 export const SITE_PRESETS = {
   'cn-cli': {
     label: '国内版 CLI（copilot.tencent.com）',
@@ -171,4 +180,64 @@ export function getSite(cfg, site) {
   const s = cfg.sites?.[site];
   if (!s) throw Object.assign(new Error(`未知站点：${site}（可用：${siteKeys(cfg).join(', ')}）`), { status: 400 });
   return s;
+}
+
+/** 同源多账号（账号池）工具：槽位键格式校验，防止路径穿越。 */
+export function assertSlotKey(key) {
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(String(key || ''))) {
+    throw Object.assign(new Error(`非法槽位键：${key}（只允许小写字母/数字/连字符，1–32 位）`), { status: 400 });
+  }
+  return String(key);
+}
+
+/** 槽位所属分组：克隆槽位的 cloneOf，否则是自身（内置三站各自成组）。 */
+export function slotGroupOf(siteCfg, site) {
+  return siteCfg?.cloneOf || site;
+}
+
+/** 按分组整理站点键：[{ group, keys }]，保证内置站排前面、克隆槽位跟在来源站后面。 */
+export function siteGroups(cfg) {
+  const keys = Object.keys(cfg.sites || {});
+  const order = ['cn-cli', 'intl-cli', 'intl-work'];
+  const groups = new Map();
+  for (const k of keys) {
+    const g = slotGroupOf(cfg.sites[k], k);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(k);
+  }
+  for (const list of groups.values()) list.sort((a, b) => (a === slotGroupOf(cfg.sites[a], a) ? -1 : 0) - (b === slotGroupOf(cfg.sites[b], b) ? -1 : 0) || (a < b ? -1 : 1));
+  return [...groups.entries()]
+    .sort(([a], [b]) => order.indexOf(a) - order.indexOf(b) || (a < b ? -1 : 1))
+    .map(([group, list]) => ({ group, keys: list }));
+}
+
+/** 克隆一个同源账号槽位：完整复制来源站配置（apiBase/域名/UA 等一致），label 自动编号。 */
+export function cloneSiteSlot(cfg, from, key, label) {
+  const src = cfg.sites?.[from];
+  if (!src) throw Object.assign(new Error(`未知来源站点：${from}`), { status: 400 });
+  const k = assertSlotKey(key);
+  if (cfg.sites[k]) throw Object.assign(new Error(`槽位键已存在：${k}`), { status: 400 });
+  const siblings = Object.keys(cfg.sites).filter((x) => slotGroupOf(cfg.sites[x], x) === slotGroupOf(src, from));
+  const n = siblings.length + 1;
+  cfg.sites[k] = {
+    ...structuredClone(src),
+    label: label?.trim() || `${src.label}（账号${n}）`,
+    cloneOf: slotGroupOf(src, from),
+    enabled: true,
+  };
+  delete cfg.sites[k].seedModels; // 克隆槽位不继承内置兜底清单，避免脏展示（登录后走真实目录）
+  saveConfig(cfg);
+  return { key: k, site: cfg.sites[k] };
+}
+
+/** 删除一个克隆槽位（内置三站不可删；顺带清凭证与目录缓存由调用方处理）。 */
+export function removeSiteSlot(cfg, key) {
+  const k = assertSlotKey(key);
+  const s = cfg.sites?.[k];
+  if (!s) throw Object.assign(new Error(`未知站点：${k}`), { status: 400 });
+  if (!s.cloneOf) throw Object.assign(new Error(`内置站点不可删除：${k}（如需停用可设 enabled=false）`), { status: 400 });
+  if (cfg.defaultSite === k) throw Object.assign(new Error(`该槽位是当前默认站点，请先切换默认站点再删除`), { status: 400 });
+  delete cfg.sites[k];
+  saveConfig(cfg);
+  return { key: k };
 }

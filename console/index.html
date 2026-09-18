@@ -108,6 +108,7 @@
   .pill.free{color:#06281c;background:var(--ok);border-color:var(--ok);font-weight:700}
   .pill.paid{color:var(--warn);border-color:#5a4413;background:rgba(251,191,36,.08)}
   .pill.ok{color:var(--ok);border-color:#1d4a2f;background:rgba(52,211,153,.1)}
+  .pill.warn{color:var(--warn);border-color:#5a4413;background:rgba(251,191,36,.08)}
   .pill.bad{color:var(--bad);border-color:#4a1d1d;background:rgba(251,113,133,.1)}
   .pill.dim{border-style:dashed}
   code.mid{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;display:inline-block;max-width:330px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
@@ -160,6 +161,7 @@
 
 <nav>
   <button data-tab="overview" class="active">状态总览</button>
+  <button data-tab="checkin">一键签到</button>
   <button data-tab="models">模型与切换</button>
   <button data-tab="usage">用量统计</button>
   <button data-tab="logs">实时日志</button>
@@ -179,6 +181,31 @@
       <div class="kv"><span>API 密钥</span><span><button class="btn" onclick="copyText(document.getElementById('apiKey').textContent)">复制</button></span></div>
       <div class="code" id="apiKey"></div>
       <p class="hint">模型 ID 填 <b>default</b> 就能用当前默认模型；以后换模型在本控制台点一下即可，<b>不用再改 Agent</b>。<br>想固定用某个模型，也可直接填该模型 ID（如 <code>gpt-5.6-luna</code>、<code>claude-sonnet-4.6</code>）。</p>
+    </div>
+  </section>
+
+  <!-- 一键签到 -->
+  <section id="tab-checkin" class="hidden">
+    <div class="cards" id="checkinCards"></div>
+    <div class="card" style="margin-top:14px">
+      <h3>一键签到 <span class="muted" style="font-weight:400;font-size:12px">（先查状态、未签才领，重复点不会多领）</span></h3>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" id="checkinBtn" onclick="claimAll()">一键签到（全部已登录站点）</button>
+        <button class="btn" id="growthBtn" onclick="growthAll()">签到 + 成长中心全量</button>
+        <span class="muted" style="font-size:12px">成长中心：旅行礼物 / 派 Buddy / 任务 / 补登 / 连登兑换 / 抽奖 / 盲盒</span>
+      </div>
+      <p class="hint" id="checkinMsg">正在加载签到状态…</p>
+      <div class="kv"><span>上次签到</span><span id="checkinLast"></span></div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h3>自动签到 <span class="muted" style="font-weight:400;font-size:12px">（每天到点自动跑一轮）</span></h3>
+      <div class="row" style="margin-top:10px">
+        <label class="chk"><input type="checkbox" id="autoOn" /> 开启自动签到</label>
+        <input id="autoTime" type="time" value="09:10" style="width:110px" />
+        <button class="btn primary" onclick="saveAuto()">保存</button>
+        <span class="muted" style="font-size:12px">服务常驻时由服务执行；电脑常关机请再装计划任务（checkin-install.cmd）。</span>
+      </div>
+      <p class="hint">命令行也行：<code>node checkin.mjs --claim</code>（仅签到）/ <code>node checkin.mjs --growth</code>（全量），双击 <code>checkin.cmd</code> 更省事。</p>
     </div>
   </section>
 
@@ -272,7 +299,10 @@
 
   <!-- 账号 -->
   <section id="tab-accounts" class="hidden">
-    <div class="cards" id="accountCards"></div>
+    <div id="accountCards"></div>
+    <p class="hint" style="margin-top:10px">加号：给该组再加一个同源账号槽位（如国内版加 <code>cn-2</code>），然后对新槽位走一遍登录；
+      反代时裸模型名 / <code>default</code> 走「默认」槽位的账号，想固定用某个号就写 <code>槽位/模型</code>（如 <code>cn-2/hy3</code>）；
+      一键签到默认覆盖全部已登录槽位。</p>
     <div class="card hidden" id="loginBox" style="margin-top:14px">
       <h3>完成授权</h3>
       <p class="hint">在浏览器打开下面的链接登录（国际版可在页面直接注册），然后点「我已完成授权」。</p>
@@ -340,9 +370,10 @@ let MODEL_SITE = null; // 模型列表的站点筛选（null = 全部）
 document.querySelectorAll('nav button').forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
-    ['overview', 'models', 'usage', 'logs', 'accounts', 'service'].forEach((t) => {
+    ['overview', 'checkin', 'models', 'usage', 'logs', 'accounts', 'service'].forEach((t) => {
       $('tab-' + t).classList.toggle('hidden', t !== b.dataset.tab);
     });
+    if (b.dataset.tab === 'checkin') loadCheckin();
     if (b.dataset.tab === 'usage') loadUsage();
     if (b.dataset.tab === 'models') renderModels();
     if (b.dataset.tab === 'accounts') renderAccounts();
@@ -578,19 +609,75 @@ async function pollLogs() {
   } catch { /* 忽略 */ }
 }
 
-// ---------- 账号 ----------
+// ---------- 账号（按同源分组展示：默认账号一键切换 + 加号/删号） ----------
 function renderAccounts() {
   if (!STATE) return;
-  $('accountCards').innerHTML = STATE.sites.map((s) => `
+  const byKey = new Map(STATE.sites.map((s) => [s.site, s]));
+  const groups = STATE.groups?.length ? STATE.groups
+    : [...new Map(STATE.sites.map((s) => [s.group || s.site, []])).keys()].map((g) => ({
+      group: g, keys: STATE.sites.filter((s) => (s.group || s.site) === g).map((s) => s.site),
+    }));
+  $('accountCards').innerHTML = groups.map((g) => {
+    const cards = (g.keys || []).map((k) => byKey.get(k)).filter(Boolean).map((s) => `
     <div class="card">
-      <h3><span class="dot ${s.logged_in ? 'on' : 'off'}"></span>${esc(s.label)}</h3>
-      <div class="kv"><span>站点键</span><span>${esc(s.site)}</span></div>
+      <h3><span class="dot ${s.logged_in ? 'on' : 'off'}"></span>${esc(s.label)}
+        ${s.is_default ? '<span class="pill ok">默认</span>' : ''}
+        ${s.clone_of ? '<span class="pill dim">账号池</span>' : ''}</h3>
+      <div class="kv"><span>槽位键</span><span><code class="mid">${esc(s.site)}</code></span></div>
       <div class="kv"><span>状态</span><span>${s.logged_in ? '已登录 ' + esc(s.uid || '') : '未登录'}</span></div>
-      <div class="row" style="margin-top:10px">
+      ${s.nickname ? `<div class="kv"><span>昵称</span><span>${esc(s.nickname)}</span></div>` : ''}
+      <div class="row" style="margin-top:10px;flex-wrap:wrap">
         <button class="btn primary" onclick="startLogin('${esc(s.site)}')">${s.logged_in ? '重新登录' : '开始登录'}</button>
+        ${!s.is_default ? `<button class="btn" onclick="setDefaultSite('${esc(s.site)}')">设为默认</button>` : ''}
         ${s.logged_in ? `<button class="btn danger" onclick="logout('${esc(s.site)}')">退出登录</button>` : ''}
+        ${s.clone_of ? `<button class="btn danger" onclick="removeSlot('${esc(s.site)}')">删除</button>` : ''}
       </div>
     </div>`).join('');
+    return `<div class="card" style="margin-bottom:14px">
+      <h3>「${esc(g.group)}」账号组 <span class="muted" style="font-weight:400;font-size:12px">（同组账号走同一上游，凭证相互隔离）</span></h3>
+      <div class="cards">${cards}</div>
+      <div class="row" style="margin-top:10px">
+        <input id="newKey-${esc(g.group)}" placeholder="新槽位键，如 cn-2" style="width:170px" />
+        <input id="newLabel-${esc(g.group)}" placeholder="备注名（可选）" style="width:190px" />
+        <button class="btn" onclick="addSlot('${esc(g.group)}')">+ 加一个账号</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function addSlot(group) {
+  const key = (($('newKey-' + group) || {}).value || '').trim().toLowerCase();
+  const label = (($('newLabel-' + group) || {}).value || '').trim();
+  if (!key) { alert('先填新槽位键，例如 cn-2'); return; }
+  try {
+    await api('/sites', { method: 'POST', body: { from: group, key, label } });
+    await loadState();
+    renderAccounts();
+  } catch (e) {
+    alert('添加失败：' + e.message);
+  }
+}
+
+async function removeSlot(site) {
+  if (!confirm(`确定删除账号槽位 ${site}？（同时删除它的登录凭证，不可恢复）`)) return;
+  try {
+    await api('/sites/remove', { method: 'POST', body: { site } });
+    await loadState();
+    renderAccounts();
+  } catch (e) {
+    alert('删除失败：' + e.message);
+  }
+}
+
+async function setDefaultSite(site) {
+  try {
+    const r = await api('/sites/default', { method: 'POST', body: { site } });
+    $('svcSite').textContent = r.default_site;
+    await loadState();
+    renderAccounts();
+  } catch (e) {
+    alert('切换失败：' + e.message);
+  }
 }
 
 async function startLogin(site) {
@@ -630,6 +717,81 @@ async function logout(site) {
   renderAccounts();
 }
 
+// ---------- 一键签到 ----------
+async function loadCheckin() {
+  const msgEl = $('checkinMsg');
+  try {
+    const r = await api('/checkin/status');
+    const list = r.results || [];
+    const byGroup = new Map();
+    list.forEach((s) => {
+      const g = s.clone_of || s.site;
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g).push(s);
+    });
+    const groups = [...byGroup.entries()].map(([g, items]) => ({ group: g, items }));
+    $('checkinCards').innerHTML = groups.map((grp) => {
+      const cards = grp.items.map((s) => {
+        const badge = !s.ok ? '<span class="pill bad">查询失败</span>'
+          : s.active === false ? '<span class="pill dim">活动未开启</span>'
+          : s.todayCheckedIn ? '<span class="pill ok">今日已签</span>'
+          : '<span class="pill warn">今日未签</span>';
+        const sub = !s.ok ? esc(s.error || '')
+          : s.active === false ? esc(s.activityName || '')
+          : `${s.streakDays != null ? '连续 ' + esc(s.streakDays) + ' 天' : ''}${s.totalCredits != null ? ' · 累计 ' + esc(s.totalCredits) : ''}${s.todayCredit != null ? ' · 今日 +' + esc(s.todayCredit) : ''}`;
+        const poolTag = s.clone_of ? '<span class="sbadge alias">账号池</span>' : '';
+        const extra = s.ok && s.nickname ? '<div class="kv"><span>昵称</span><span>' + esc(s.nickname) + '</span></div>' : '';
+        return '<div class="card"><h3>' + badge + ' ' + poolTag + ' ' + esc(s.label || s.site) + '</h3><div class="kv"><span>槽位键</span><span><code class="mid">' + esc(s.site) + '</code></span></div><div class="kv"><span>状态</span><span>' + sub + '</span></div>' + extra + '</div>';
+      }).join('');
+      return '<div class="card" style="margin-bottom:14px"><h3>「' + esc(grp.group) + '」<span class="muted" style="font-weight:400;font-size:12.5px">（' + grp.items.length + ' 个账号）</span></h3><div class="cards">' + cards + '</div></div>';
+    }).join('') || '<div class="card">暂无站点</div>';
+    const auto = await api('/checkin/auto');
+    $('autoOn').checked = !!auto.enabled;
+    $('autoTime').value = `${String(auto.hour ?? 9).padStart(2, '0')}:${String(auto.minute ?? 10).padStart(2, '0')}`;
+    $('checkinLast').textContent = auto.lastRun ? `${auto.lastRun.at}（${auto.lastRun.trigger}，${auto.lastRun.claimed}/${auto.lastRun.count}）` : '暂无记录';
+    if (!msgEl.dataset.touched) msgEl.textContent = '点上面按钮即领今日签到；成长中心会顺手领旅行/任务/兑换/抽奖等。';
+  } catch (e) {
+    msgEl.textContent = '签到状态加载失败：' + e.message;
+  }
+}
+
+async function claimAll() {
+  $('checkinBtn').disabled = true;
+  $('checkinMsg').dataset.touched = '1';
+  $('checkinMsg').textContent = '签到中…';
+  try {
+    const r = await api('/checkin/claim', { method: 'POST', body: {} });
+    $('checkinMsg').textContent = (r.results || []).map((x) => `[${x.site}] ${x.report}`).join('；');
+    await loadCheckin();
+  } catch (e) {
+    $('checkinMsg').textContent = '签到失败：' + e.message;
+  } finally {
+    $('checkinBtn').disabled = false;
+  }
+}
+
+async function growthAll() {
+  $('growthBtn').disabled = true;
+  $('checkinMsg').dataset.touched = '1';
+  $('checkinMsg').textContent = '成长中心领取中（十几个接口顺序跑，约需半分钟）…';
+  try {
+    const r = await api('/checkin/growth', { method: 'POST', body: {} });
+    $('checkinMsg').textContent = (r.results || []).map((x) => `[${x.site}] ${x.report}`).join('；');
+    await loadCheckin();
+  } catch (e) {
+    $('checkinMsg').textContent = '领取失败：' + e.message;
+  } finally {
+    $('growthBtn').disabled = false;
+  }
+}
+
+async function saveAuto() {
+  const [h, m] = String($('autoTime').value || '09:10').split(':').map(Number);
+  const r = await api('/checkin/auto', { method: 'POST', body: { enabled: $('autoOn').checked, hour: h, minute: m } });
+  $('checkinMsg').dataset.touched = '1';
+  $('checkinMsg').textContent = r.enabled ? `自动签到已开启（每天 ${String(r.hour).padStart(2, '0')}:${String(r.minute).padStart(2, '0')}）` : '自动签到已关闭';
+}
+
 // ---------- 服务 ----------
 async function stopService() {
   if (!confirm('确定停止反代服务？Agent 会立刻连不上。')) return;
@@ -642,9 +804,10 @@ function copyText(t) { navigator.clipboard?.writeText(t); }
 
 // ---------- 启动 ----------
 (async () => {
-  await loadState();
-  await loadModels();
-  renderAccounts();
+  try { await loadState(); } catch (e) { console.warn('loadState 失败：', e.message); }
+  try { await loadModels(); } catch (e) { console.warn('loadModels 失败：', e.message); }
+  try { renderAccounts(); } catch (e) { console.warn('renderAccounts 失败：', e.message); }
+  try { await loadCheckin(); } catch (e) { console.warn('loadCheckin 失败：', e.message); }
   pollLogs();
   setInterval(pollLogs, 2000);
   setInterval(loadState, 20000);

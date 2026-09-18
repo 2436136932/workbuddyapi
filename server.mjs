@@ -16,6 +16,7 @@ import { handleConsoleApi } from './src/console-api.mjs';
 import { flushUsage } from './src/usage.mjs';
 import { readJsonBody, sendJson, sendError } from './src/util.mjs';
 import { resolveCorsOrigin } from './src/cors.mjs';
+import { maybeAutoCheckin, autoCheckinStatus } from './src/auto-checkin.mjs';
 import { log, warn, error } from './src/log.mjs';
 
 const cfg = loadConfig();
@@ -239,6 +240,12 @@ server.listen(cfg.port, cfg.host, () => {
   }
   log('  未登录的站点可在控制台「账号登录」里点一下，或运行：node login.mjs --site <站点名>');
   log(`  OpenAI 客户端：Base URL = http://${cfg.host}:${cfg.port}/v1`);
+  const auto = autoCheckinStatus();
+  log(`  自动签到：${auto.enabled ? `已开启（每天 ${String(auto.hour).padStart(2, '0')}:${String(auto.minute).padStart(2, '0')}，服务常驻时自动执行）` : '未开启（控制台「一键签到」里可开，或运行 node checkin.mjs）'}`);
+  // 自动签到：每分钟检查一次（到点且今日未跑 → 跑一轮）。服务没启动时不会跑，
+  // Windows 常驻建议用 checkin-scheduled.cmd 注册计划任务（见 README 第 6 节）。
+  setInterval(() => { maybeAutoCheckin(cfg); }, 60 * 1000).unref?.();
+  setTimeout(() => { maybeAutoCheckin(cfg); }, 30 * 1000).unref?.();
 });
 
 process.on('SIGINT', () => {

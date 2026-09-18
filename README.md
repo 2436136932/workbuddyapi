@@ -29,6 +29,10 @@ workbuddyapi/
 ├── console-open.vbs      # 隐藏窗口调用上面那个（桌面快捷方式用）
 ├── login.mjs             # 设备授权登录（--site 选站点），凭证写入 auth.<站点>.json
 ├── status.mjs            # 查看各站点登录状态 + 剩余积分
+├── checkin.mjs           # 一键签到（--claim 领取 / --growth 含成长中心 / --site 选站点）
+├── checkin.cmd           # 双击一键签到（全部已登录站点）
+├── checkin-install.cmd   # 注册 Windows 计划任务（每天 09:10 自动签到）
+├── checkin-scheduled.cmd # 计划任务实际执行脚本（静默，结果进 checkin.log）
 ├── ask.mjs               # 命令行提问客户端（验证代理是否正常）
 ├── stop.mjs              # 通过 /admin/shutdown 优雅停止服务
 ├── start.cmd             # 双击启动（前台，带日志）
@@ -44,6 +48,7 @@ workbuddyapi/
 │   ├── cors.test.mjs
 │   ├── router.test.mjs
 │   ├── upstream.test.mjs
+│   ├── checkin.test.mjs
 │   └── anthropic.test.mjs
 └── src/
     ├── config.mjs        # 配置加载 + 站点表（国内版 / 国际版）
@@ -51,10 +56,14 @@ workbuddyapi/
     ├── device-login.mjs  # 设备授权登录（CLI 与控制台共用）
     ├── headers.mjs       # 站点感知的上游请求头
     ├── upstream.mjs      # 上游聊天/模型/额度接口 + SSE 解析
+    ├── checkin.mjs       # 一键签到 + 成长中心（签到状态/领取/旅行/任务/补登/兑换/抽奖/盲盒）
+    ├── auto-checkin.mjs  # 自动签到开关 + 定时触发 + 签到记录（落盘 checkin.json）
+    ├── headers.mjs       # 站点感知的上游请求头
+    ├── upstream.mjs      # 上游聊天/模型/额度接口 + SSE 解析
     ├── router.mjs        # 模型 → 站点 路由（default 别名 / 前缀 / 路由表 / 目录并发匹配 + 目录缓存）
     ├── openai.mjs        # /v1/models、/v1/chat/completions
     ├── anthropic.mjs     # /v1/messages、/v1/messages/count_tokens
-    ├── console-api.mjs   # 控制台后端接口（状态/模型/切换/日志/用量/探测/登录/停服）
+    ├── console-api.mjs   # 控制台后端接口（状态/模型/切换/签到/日志/用量/探测/登录/停服）
     ├── usage.mjs         # 用量统计（按天/站点/模型，落盘 usage.json）
     ├── cors.mjs          # 浏览器来源（Origin）判定
     ├── util.mjs          # HTTP/SSE 小工具（含带超时的 fetch）
@@ -63,7 +72,7 @@ workbuddyapi/
 
 运行时自动生成、**已被 .gitignore 忽略**的文件：`config.json`（含本地 API Key）、
 `auth.<站点>.json`（各站点登录凭证，如 `auth.cn-cli.json`）、`usage.json`（用量统计）、
-`.login-state.json`、`server.log` / `console.log`。
+`checkin.json`（签到记录 + 自动签到开关）、`.login-state.json`、`server.log` / `console.log` / `checkin.log`。
 
 启动后会打印每个站点的登录状态：
 
@@ -93,6 +102,8 @@ node server.mjs          # 前台运行（日志直接打在终端，Ctrl+C 停�
 | `start-hidden.vbs` | 完全隐藏启动，日志写入 `server.log`（桌面「启动 WorkBuddy 反代」快捷方式用的就是它） |
 | `stop.cmd` | 停止服务（调 `/admin/shutdown`，不依赖 WMI/进程枚举） |
 | `status.cmd` | 查看各站点登录态 + 剩余积分 |
+| `checkin.cmd` | 一键签到（全部已登录站点；`node checkin.mjs --growth` 含成长中心全量） |
+| `checkin-install.cmd` | 注册 Windows 计划任务（每天 09:10 自动签到，服务没启动也能跑） |
 | `ask.cmd` / `ask.mjs` | 命令行提问，用来验证代理是否正常 |
 | `login.cmd` / `login-intl.cmd` | 登录国内版 / 选择国际版站点 |
 
@@ -130,6 +141,7 @@ node ask.mjs claude-sonnet-4.6 "你好"    # 直接提问，会显示是哪个�
 | 页签 | 能做什么 |
 |---|---|
 | **状态总览** | 各站点登录态、剩余额度、可用模型数、token 到期时间；TraeWork 该填的 URL 与密钥 |
+| **一键签到** | 各站点签到状态、一键领取今日签到、签到 + 成长中心全量（旅行/任务/补登/兑换/抽奖/盲盒）、自动签到开关 |
 | **模型与切换** | 列出全部站点模型（标注积分倍率、`免费` 徽章），点「设为默认」即完成切换；支持搜索、**按站点筛选**、只看免费、隐藏站点副本 / 未登录清单、批量探测可用性 |
 | **用量统计** | 今日 / 累计调用次数、token、credit 消耗；最近 7 天柱状图；按模型排行（数字格式化、占比条、合计行，可按消耗 / 调用 / 失败 / Token 排序）；可一键清空 |
 | **实时日志** | 最近 500 条日志滚动刷新，请求日志按状态着色 |
@@ -323,13 +335,47 @@ npm start          # 等价于 node server.mjs
 npm test           # node --test：运行 test/ 下的单元测试（零依赖，内置测试运行器）
 ```
 
-- 站点路由、SSE 帧分类、Anthropic ↔ OpenAI 转换、来源判定、credit 提取等**纯函数都有 `node:test` 单测**，
-  改动这些逻辑后跑一遍 `npm test` 即可快速回归（当前 26 个用例）。
+- 站点路由、SSE 帧分类、Anthropic ↔ OpenAI 转换、来源判定、credit 提取、自动签到开关等**纯函数都有 `node:test` 单测**，
+  改动这些逻辑后跑一遍 `npm test` 即可快速回归（当前 28 个用例）。
 - 要求 **Node ≥ 20.11**（见 `package.json` 的 `engines`；`import.meta.dirname` 依赖此版本）。
 
 ---
 
-## 6. 常见问题
+## 6. 一键签到（仿 workbuddy-switch）
+
+> 产品形态对标 [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) 的签到页；
+> 上游接口形态参考 [88lin/workbuddy-auto-signin](https://github.com/88lin/workbuddy-auto-signin)（MIT），
+> 本项目代码为独立重写，**复用本项目各站点的登录凭证**（`auth.<站点>.json`），不读桌面端文件。
+
+| 方式 | 用法 |
+|---|---|
+| 控制台 | 「一键签到」页签：看各站点状态 → 点「一键签到」或「签到 + 成长中心全量」 |
+| 命令行 | `node checkin.mjs`（查状态）/ `node checkin.mjs --claim`（领取）/ `node checkin.mjs --growth`（全量）/ `--site cn-cli` 只搞一个站点 |
+| 双击 | `checkin.cmd`（一键领取全部已登录站点） |
+| 自动签到（服务常驻） | 控制台「一键签到」里打开开关、设好时间；服务每天到点自动跑一轮 |
+| 自动签到（Windows 计划任务） | 双击 `checkin-install.cmd` 注册每天 09:10 的任务（服务没启动也能跑，结果进 `checkin.log`） |
+
+一键签到 = 先查 `POST {apiBase}/v2/billing/meter/checkin-activity-status`，未签才调
+`POST {apiBase}/v2/billing/meter/daily-checkin` 领取（**幂等**：重复点只会返回「今日已签」，不会多领）。
+「成长中心全量」还会顺手跑 `base={apiBase}/v2/activity/growth` 下的：领旅行礼物 → 派 Buddy →
+领任务/领任务奖 → 断登补签（每轮 1 张）→ 连登兑换（7/14/28 天）→ 抽奖 → 开 Buddy 盲盒。
+各段独立 try，一段失败不影响其余；401/403 会明确报「登录态失效」。
+
+控制台接口（鉴权同其它控制台接口）：
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/console/api/checkin/status` | GET | 各站点签到状态（今日是否已签 / 连签天数 / 累计积分） |
+| `/console/api/checkin/claim` | POST | 一键领取（body 可选 `{ sites: [...] }`，默认全部已启用站点） |
+| `/console/api/checkin/growth` | POST | 签到 + 成长中心全量（`{ includeCheckin: true }`） |
+| `/console/api/checkin/auto` | GET/POST | 自动签到开关（`{ enabled, hour, minute, sites }`） |
+
+一键签到默认覆盖**全部已登录槽位**（见 6.1），包括克隆出来的账号池中的每个账号；
+想只签某个号，可指定 `sites` 列表（槽位键），例如 `POST /console/api/checkin/claim { "sites": ["cn-2"] }`。
+
+---
+
+## 7. 常见问题
 
 | 现象 | 处理 |
 |---|---|
@@ -338,7 +384,7 @@ npm test           # node --test：运行 test/ 下的单元测试（零依赖�
 | 401「登录态失效」 | 该站点 refreshToken 已过期，重新登录该站点 |
 | 402 额度不足 | 该站点剩余积分用完（两边额度不通用，可切到另一站点） |
 | 429 限流 | 稍后重试，降低并发 |
-| `model xxx is only available for authorized users` | 该模型你的账号无权限，换第 7 节清单里的模型 |
+| `model xxx is only available for authorized users` | 该模型你的账号无权限，换第 8 节清单里的模型 |
 | 国际版报 401/500 但国内版正常 | 国际版是独立账号体系，需要单独 `--site intl-cli` / `--site intl-work` 登录 |
 | 模型回答被截断 | 上游「思考」也计入输出 token；在 TraeWork 高级配置里调大输出上下文窗口 |
 | TraeWork 里模型列表为空 | TraeWork 不拉 `/v1/models`，模型 ID 手填即可 |
@@ -347,7 +393,7 @@ npm test           # node --test：运行 test/ 下的单元测试（零依赖�
 
 ---
 
-## 7. 示例模型清单
+## 8. 示例模型清单
 
 > 各账号可用模型不同（取决于套餐/权限），**实际清单以 `GET /v1/models` 实时返回为准**。下表仅为一个普通账号的示例：
 
@@ -375,7 +421,7 @@ npm test           # node --test：运行 test/ 下的单元测试（零依赖�
 
 ---
 
-## 8. 接口一览
+## 9. 接口一览
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
@@ -390,7 +436,7 @@ npm test           # node --test：运行 test/ 下的单元测试（零依赖�
 
 ---
 
-## 9. 已验证项（Windows + Node 24 实测）
+## 10. 已验证项（Windows + Node 24 实测）
 
 - ✅ 设备授权登录、`refresh_token` 自动续期（accessToken 临期 5 分钟内自动刷新，遇 401 强刷重试一次）
 - ✅ 国内版 / 国际版多站点：站点表、独立凭证、`站点/模型` 前缀路由、目录匹配自动选站点
@@ -403,7 +449,7 @@ npm test           # node --test：运行 test/ 下的单元测试（零依赖�
 
 ---
 
-## 10. 安全与合规
+## 11. 安全与合规
 
 - 仅监听 `127.0.0.1`；`auth.<站点>.json` 权限 0600，**不要外传**、不要提交仓库（`.gitignore` 已忽略）。
 - 走的是 **CodeBuddy 官方 CLI 所用的非公开接口**，无官方文档、可能随时变更；本项目只做本机自用转发。
@@ -412,7 +458,7 @@ npm test           # node --test：运行 test/ 下的单元测试（零依赖�
 
 ---
 
-## 11. 致谢
+## 12. 致谢
 
 上游协议细节参考了以下开源项目的公开实现（本项目代码为独立重写，仅借鉴接口形态与字段约定）：
 
@@ -422,12 +468,16 @@ npm test           # node --test：运行 test/ 下的单元测试（零依赖�
   与 IDE 侧调用形态
 - [maiphucgiang/codebuddy2api](https://github.com/maiphucgiang/codebuddy2api)（Python）— 国内版 / 国际版站点域名划分、
   积分倍率与额度互不通用等口径说明
+- [88lin/workbuddy-auto-signin](https://github.com/88lin/workbuddy-auto-signin)（Python，MIT）— 每日签到
+  `checkin-activity-status` / `daily-checkin` 与成长中心 `v2/activity/growth` 各接口形态
+- [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch)（MIT）— 「一键签到 / 自动签到」
+  产品形态（本项目控制台「一键签到」页签即仿此）
 
 Trae / TraeWork / CodeBuddy / WorkBuddy 均为其各自所有者的商标，本项目与上述公司无隶属关系。
 
 ---
 
-## 12. 许可证
+## 13. 许可证
 
 [MIT](LICENSE)
 
