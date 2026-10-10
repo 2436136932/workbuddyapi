@@ -1,10 +1,13 @@
 {
+  "//": "配置样例：复制为 data/config.json 后按需修改（首次启动也会自动生成一份）。",
+  "//env": "所有键都可用 WB_* 环境变量覆盖：WB_PORT / WB_API_KEY / WB_HOST / WB_DEFAULT_SITE / WB_DEFAULT_MODEL / WB_CORS_ORIGINS / WB_IP_ALLOWLIST / WB_METRICS / WB_DATA_DIR。",
   "host": "127.0.0.1",
   "port": 8788,
   "apiKey": "123456",
   "defaultSite": "cn-cli",
   "defaultModel": "deepseek-v4-pro",
   "defaultMaxTokens": 16384,
+  "defaultSystemPrompt": "You are a helpful AI assistant.",
   "stripFields": [],
   "sites": {
     "cn-cli": {
@@ -55,8 +58,37 @@
   },
   "timeouts": {
     "headerMs": 90000,
-    "idleMs": 300000
+    "idleMs": 300000,
+    "metaMs": 20000
   },
+  "concurrency": { "perSite": 8 },
+  "retry": { "max": 2, "baseMs": 600, "maxMs": 5000 },
+  "cors": { "allowOrigins": [] },
+
+  "//access": "访问控制：主密钥策略 / 来源 IP 白名单 / 审计。受限密钥请在控制台「访问控制」页或用 data/keys.json 管理。",
+  "access": {
+    "master": {
+      "name": "主密钥",
+      "rpm": 0,
+      "concurrency": 0,
+      "dailyCalls": 0,
+      "dailyCredit": 0
+    },
+    "ipAllowList": [],
+    "audit": {
+      "enabled": true,
+      "maxEntries": 2000,
+      "includeBody": false
+    }
+  },
+
+  "//metrics": "监控：/metrics（Prometheus 文本格式）与内存中保留的最近请求条数。",
+  "metrics": {
+    "enabled": true,
+    "recentRequests": 200,
+    "latencyBucketsMs": [50, 100, 250, 500, 1000, 2000, 5000, 10000, 30000]
+  },
+
   "models": [
     { "id": "hy3", "name": "Hy3" },
     { "id": "deepseek-v4.1-flash", "name": "DeepSeek-V4.1-Flash" },

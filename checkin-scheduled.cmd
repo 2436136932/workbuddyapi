@@ -1,4 +1,5 @@
 @echo off
-:: 计划任务实际执行的脚本（静默）：签到 + 成长中心，结果追加到 checkin.log
+:: Scheduled task entry (silent): checkin + growth center, appended to data\checkin.log
 cd /d "%~dp0"
-node checkin.mjs --growth >> checkin.log 2>&1
+if not exist "data" mkdir "data"
+node checkin.mjs --growth >> data\checkin.log 2>&1

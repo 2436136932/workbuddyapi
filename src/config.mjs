@@ -1,24 +1,110 @@
-// 配置与路径：所有文件（配置、凭证、日志）一律限定在本项目目录内，绝不读写项目外文件。
+// 配置与路径：所有文件（配置、凭证、统计、日志）一律限定在本项目目录内，绝不读写项目外文件。
+//
+// 目录约定（v1.2 起）：所有运行时数据统一收进 `data/`，项目根目录只保留代码与文档。
+//   data/config.json          主配置（可被环境变量覆盖）
+//   data/auth.<站点>.json      各站点 / 账号槽位凭证
+//   data/keys.json            访问密钥（多密钥、哈希存储、作用域与限流）
+//   data/usage.json           用量统计
+//   data/checkin.json         签到记录与自动签到开关
+//   data/audit.log            访问审计（JSONL）
+//   data/server.log 等        运行日志
+// 旧版本放在根目录的同名文件会在首次启动时自动迁移进 data/（不删除用户数据，仅移动）。
 import fs from 'node:fs';
 import path from 'node:path';
 
 export const ROOT = path.resolve(import.meta.dirname, '..');
 
+/** 数据目录：默认 <项目>/data，可用 WB_DATA_DIR 覆盖（便于测试或多实例隔离）。 */
+export const DATA_DIR = process.env.WB_DATA_DIR
+  ? path.resolve(process.env.WB_DATA_DIR)
+  : path.join(ROOT, 'data');
+
 export const paths = {
   root: ROOT,
-  config: path.join(ROOT, 'config.json'),
-  legacyAuth: path.join(ROOT, 'auth.json'), // 旧版单站点凭证（国内版），仍兼容读取
-  loginState: path.join(ROOT, '.login-state.json'),
+  data: DATA_DIR,
+  config: path.join(DATA_DIR, 'config.json'),
+  legacyAuth: path.join(DATA_DIR, 'auth.json'), // 旧版单站点凭证（国内版），仍兼容读取
+  loginState: path.join(DATA_DIR, '.login-state.json'),
+  keys: path.join(DATA_DIR, 'keys.json'),
+  usage: path.join(DATA_DIR, 'usage.json'),
+  checkin: path.join(DATA_DIR, 'checkin.json'),
+  audit: path.join(DATA_DIR, 'audit.log'),
+  log: path.join(DATA_DIR, 'server.log'),
 };
 
-/** 单个站点的凭证文件：auth.<site>.json（多账号即多槽位，各自一份，天然隔离）。 */
+export function ensureDataDir() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+  }
+  return DATA_DIR;
+}
+
+/**
+ * 把旧版根目录下的运行时文件迁移进 data/。
+ * 只在「新位置不存在」时移动，绝不覆盖已有数据；移动失败（跨卷等）退化为复制+删除。
+ * @returns {string[]} 实际迁移的文件名
+ */
+export function migrateLegacyFiles() {
+  ensureDataDir();
+  if (path.resolve(DATA_DIR) === path.resolve(ROOT)) return [];
+  let names = [];
+  try {
+    names = fs.readdirSync(ROOT);
+  } catch {
+    return [];
+  }
+  // 根目录下的运行时数据：固定名 + auth.<站点>.json + 各类日志
+  const isRuntime = (n) =>
+    ['config.json', 'usage.json', 'checkin.json', '.login-state.json', 'auth.json',
+      'server.log', 'console.log', 'checkin.log'].includes(n)
+    || /^auth\.[A-Za-z0-9][A-Za-z0-9-]{0,31}\.json$/.test(n);
+
+  const moved = [];
+  for (const name of names) {
+    if (!isRuntime(name)) continue;
+    const from = path.join(ROOT, name);
+    const to = path.join(DATA_DIR, name);
+    try {
+      if (!fs.statSync(from).isFile()) continue;
+    } catch {
+      continue;
+    }
+    if (fs.existsSync(to)) continue; // 新位置已有数据：保留两者，不覆盖
+    try {
+      fs.renameSync(from, to);
+      moved.push(name);
+    } catch {
+      try {
+        fs.copyFileSync(from, to);
+        fs.rmSync(from, { force: true });
+        moved.push(name);
+      } catch {
+        /* 迁移失败不阻塞启动：仍可读旧位置 */
+      }
+    }
+  }
+  return moved;
+}
+
+/** 兼容读取：新位置优先，其次旧位置（迁移失败时的兜底）。 */
+export function resolveDataFile(name) {
+  const inData = path.join(DATA_DIR, name);
+  if (fs.existsSync(inData)) return inData;
+  const inRoot = path.join(ROOT, name);
+  if (path.resolve(DATA_DIR) !== path.resolve(ROOT) && fs.existsSync(inRoot)) return inRoot;
+  return inData;
+}
+
+/** 单个站点的凭证文件：data/auth.<site>.json（多账号即多槽位，各自一份，天然隔离）。 */
 export function authPathFor(site) {
   const key = String(site || '');
   // 槽位键白名单（与 config.assertSlotKey 同规则，另兼容历史三站键名）：防路径穿越
   if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/.test(key)) {
     throw Object.assign(new Error(`非法站点键：${site}`), { status: 400 });
   }
-  return path.join(ROOT, `auth.${key}.json`);
+  return path.join(DATA_DIR, `auth.${key}.json`);
 }
 
 // 上游站点预设：国内版与国际版协议同构，仅域名 / 身份头不同。
@@ -124,7 +210,48 @@ export function defaultConfig() {
     cors: { allowOrigins: [] },
     models: DEFAULT_MODELS,
     modelAliases: {},
+    // ---- 访问控制（v1.2）----
+    access: {
+      // 主密钥（apiKey）的默认策略；data/keys.json 里的密钥可各自覆盖
+      master: { name: '主密钥', rpm: 0, concurrency: 0, dailyCalls: 0, dailyCredit: 0 },
+      // 允许访问的来源 IP；为空表示不限制（服务默认只监听 127.0.0.1）。
+      // 支持单个 IP 与 IPv4 CIDR，例如 ["127.0.0.1", "192.168.1.0/24"]
+      ipAllowList: [],
+      // 审计：记录每次请求（含被拒绝的），落盘 data/audit.log
+      audit: { enabled: true, maxEntries: 2000, includeBody: false },
+    },
+    // ---- 监控（v1.2）----
+    metrics: {
+      enabled: true, // /metrics（Prometheus 文本格式）
+      recentRequests: 200, // 内存中保留的最近请求明细条数
+      latencyBucketsMs: [50, 100, 250, 500, 1000, 2000, 5000, 10000, 30000],
+    },
   };
+}
+
+/** 环境变量覆盖（部署/容器友好）：WB_* 优先于配置文件。 */
+function applyEnvOverrides(cfg) {
+  const env = process.env;
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined);
+  if (env.WB_HOST) cfg.host = env.WB_HOST;
+  const port = num(env.WB_PORT);
+  if (port !== undefined) cfg.port = port;
+  if (env.WB_API_KEY !== undefined) cfg.apiKey = env.WB_API_KEY;
+  if (env.WB_DEFAULT_SITE) cfg.defaultSite = env.WB_DEFAULT_SITE;
+  if (env.WB_DEFAULT_MODEL) cfg.defaultModel = env.WB_DEFAULT_MODEL;
+  if (env.WB_MAX_TOKENS) {
+    const n = num(env.WB_MAX_TOKENS);
+    if (n !== undefined) cfg.defaultMaxTokens = n;
+  }
+  if (env.WB_DEFAULT_SYSTEM_PROMPT) cfg.defaultSystemPrompt = env.WB_DEFAULT_SYSTEM_PROMPT;
+  if (env.WB_CORS_ORIGINS) {
+    cfg.cors.allowOrigins = env.WB_CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  if (env.WB_IP_ALLOWLIST) {
+    cfg.access.ipAllowList = env.WB_IP_ALLOWLIST.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  if (env.WB_METRICS !== undefined) cfg.metrics.enabled = !['0', 'false', 'off'].includes(String(env.WB_METRICS).toLowerCase());
+  return cfg;
 }
 
 function deepMerge(base, over) {
@@ -153,21 +280,24 @@ function migrateLegacy(raw) {
   };
 }
 
-/** 读取 config.json；缺失时用默认配置落盘（含随机生成的本地 API Key）。 */
+/** 读取 data/config.json；缺失时用默认配置落盘（含随机生成的本地 API Key）。 */
 export function loadConfig() {
-  if (!fs.existsSync(paths.config)) {
-    const cfg = defaultConfig();
+  migrateLegacyFiles();
+  const file = resolveDataFile('config.json');
+  if (!fs.existsSync(file)) {
+    const cfg = applyEnvOverrides(defaultConfig());
     fs.writeFileSync(paths.config, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
     return cfg;
   }
-  const raw = JSON.parse(fs.readFileSync(paths.config, 'utf8'));
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
   const merged = deepMerge(defaultConfig(), migrateLegacy(raw));
   const cfg = deepMerge(merged, raw);
   delete cfg.upstream; // 已迁移到 sites
-  return cfg;
+  return applyEnvOverrides(cfg);
 }
 
 export function saveConfig(cfg) {
+  ensureDataDir();
   fs.writeFileSync(paths.config, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
 }
 

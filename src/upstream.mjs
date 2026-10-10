@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { getAuth, ensureToken } from './auth.mjs';
 import { chatHeaders, billingHeaders } from './headers.mjs';
 import { fetchWithTimeout } from './util.mjs';
+import { summarizeCredit } from './credit.mjs';
 import { warn } from './log.mjs';
 
 // ---------- 并发限制（按站点） ----------
@@ -401,8 +402,11 @@ export async function fetchModels(cfg, site) {
     }));
 }
 
-/** 查询站点剩余积分（免费额度）。国际版计费口径不同，失败时静默返回错误信息。 */
-export async function queryCredit(cfg, site) {
+/**
+ * 查询站点剩余积分（免费额度）。国际版计费口径不同，失败时静默返回错误信息。
+ * 返回额度的**组成明细**（每个套餐包的剩余量与到期时间），供控制台与 /status 展示。
+ */
+export async function queryCredit(cfg, site, { includeInactive = false } = {}) {
   const siteCfg = cfg.sites[site];
   const auth = getAuth(site);
   await ensureToken(cfg, site);
@@ -432,15 +436,13 @@ export async function queryCredit(cfg, site) {
   }
   if (json.code !== 0) throw new UpstreamError(`[${site}] 额度接口 code=${json.code}：${String(json.msg || '').slice(0, 160)}`, { status: 502, site });
   const accounts = json.data?.Response?.Data?.Accounts || [];
-  let remain = 0;
-  const detail = [];
-  for (const a of accounts) {
-    const r = a.CycleCapacitySize > 0 ? a.CycleCapacityRemain : a.CapacityRemain;
-    const n = Math.max(0, Number(r) || 0);
-    remain += n;
-    detail.push({ package: a.PackageName, remain: n, used: a.CycleCapacityUsed ?? a.CapacityUsed ?? null });
-  }
-  return { remain, detail };
+  // 规范化出「积分组成 + 各包到期时间」；同时保留旧的 detail 字段以便兼容
+  const summary = summarizeCredit(accounts, { now, includeInactive });
+  return {
+    remain: summary.remain,
+    detail: summary.parts.map((p) => ({ package: p.package, remain: p.remain, used: p.used })),
+    ...summary,
+  };
 }
 
 export function upstreamErrorMessage(status, text, site = '') {

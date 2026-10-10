@@ -1,7 +1,7 @@
-// 凭证管理（多站点）：每个站点一份 auth.<site>.json，全部落在本项目目录内。
+// 凭证管理（多站点）：每个站点一份 data/auth.<site>.json，全部落在本项目目录内。
 // 登录通过官方设备授权（OAuth）流程获得，不读取 WorkBuddy 客户端的任何本地文件。
 import fs from 'node:fs';
-import { paths, authPathFor } from './config.mjs';
+import { paths, authPathFor, ensureDataDir } from './config.mjs';
 import { refreshHeaders } from './headers.mjs';
 import { log, warn } from './log.mjs';
 
@@ -56,6 +56,7 @@ export function getAuth(site = 'cn-cli') {
 }
 
 export function saveAuth(site, next) {
+  ensureDataDir();
   const file = authPathFor(site);
   fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
   stores.set(site, { auth: next, mtime: fs.statSync(file).mtimeMs });

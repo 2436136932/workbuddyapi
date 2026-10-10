@@ -1,4 +1,7 @@
-# 本地凭证与个人配置（切勿提交）
+# 运行时数据统一放在 data/（凭证、配置、统计、审计、日志），整目录忽略
+data/
+
+# 兼容旧布局（v1.2 之前散落在根目录，首次启动会自动迁移进 data/）
 auth.json
 auth.*.json
 config.json
@@ -19,3 +22,6 @@ zcode-proxy/
 
 # AI 工具元数据与工作记忆
 .codebuddy/
+
+# Windows 文件权限诊断产物（非项目文件）
+.dsh-acl-recovery/

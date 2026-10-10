@@ -119,7 +119,9 @@ function usageOf(usage, fallbackIn, fallbackOut) {
 }
 
 export async function handleMessages(ctx) {
-  const { cfg, res, body, signal } = ctx;
+  const { cfg, res, body, signal, principal } = ctx;
+  const keyId = principal?.keyId || null;
+  const keyName = principal?.name || null;
   const publicModel = body.model || cfg.defaultModel;
   const wantsStream = body.stream === true; // 与 Anthropic 规范一致：缺省为非流式
   const started = Date.now();
@@ -131,6 +133,10 @@ export async function handleMessages(ctx) {
   const up = await openWithRetry(cfg, site, openaiBody, { signal });
   if (!up.ok) {
     requestLog({ site, model, mode: wantsStream ? 'anthropic-stream' : 'anthropic-json', status: up.status, ms: Date.now() - started, note: 'upstream_reject' });
+    recordUsage({
+      site, model, mode: wantsStream ? 'anthropic-stream' : 'anthropic-json',
+      status: up.status, ms: Date.now() - started, keyId, keyName,
+    });
     return sendError(res, up.status, upstreamErrorMessage(up.status, up.text, site), 'api_error');
   }
 
@@ -139,6 +145,10 @@ export async function handleMessages(ctx) {
     try {
       agg = await aggregateFrames(up.frames);
     } catch (e) {
+      recordUsage({
+        site, model, mode: 'anthropic-json', status: e.status || 502,
+        ms: Date.now() - started, keyId, keyName,
+      });
       return sendError(res, e.status || 502, e.message, 'api_error');
     } finally {
       up.close();
@@ -166,6 +176,7 @@ export async function handleMessages(ctx) {
       content.push({ type: 'tool_use', id: tc.id || newId('toolu'), name: tc.function.name, input: parseArgs(tc.function.arguments) });
     }
     requestLog({ site, model, mode: 'anthropic-json', status: 200, ms: Date.now() - started, real_model: agg.model });
+    const credit = agg.credit || usageCredit(agg.usage);
     recordUsage({
       site,
       model,
@@ -173,15 +184,17 @@ export async function handleMessages(ctx) {
       status: 200,
       promptTokens: agg.usage?.prompt_tokens ?? estimateTokens(JSON.stringify(body.messages || [])),
       completionTokens: agg.usage?.completion_tokens ?? estimateTokens(agg.content),
-      credit: agg.credit || usageCredit(agg.usage),
+      credit,
       ms: Date.now() - started,
       tools: agg.toolCallList.length,
       realModel: agg.model,
+      keyId,
+      keyName,
     });
     // 非流式也带出真实落点
     res.setHeader('X-Upstream-Site', site);
     if (agg.model) res.setHeader('X-Upstream-Model', agg.model);
-    return sendJson(res, 200, {
+    sendJson(res, 200, {
       id: newId('msg'),
       type: 'message',
       role: 'assistant',
@@ -193,6 +206,7 @@ export async function handleMessages(ctx) {
       stop_sequence: null,
       usage: usageOf(agg.usage, estimateTokens(JSON.stringify(body.messages || [])), estimateTokens(agg.content)),
     });
+    return { credit };
   }
 
   // 流式：把 OpenAI 增量翻译成 Anthropic SSE 事件序列
@@ -317,8 +331,11 @@ export async function handleMessages(ctx) {
       ms: Date.now() - started,
       tools: toolBlocks.size,
       realModel: upstreamModel,
+      keyId,
+      keyName,
     });
   }
+  return { credit: upstreamCredit };
 }
 
 export function handleCountTokens(ctx) {

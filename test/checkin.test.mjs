@@ -2,11 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { autoCheckinStatus, setAutoCheckin, recordCheckinRun } from '../src/auto-checkin.mjs';
 
-// 注意：这些测试会读写项目内的 checkin.json（gitignore 已忽略），跑完恢复原状。
+// 注意：这些测试会读写 data/checkin.json（gitignore 已忽略），跑完恢复原状。
 import fs from 'node:fs';
-import path from 'node:path';
-import { ROOT } from '../src/config.mjs';
-const FILE = path.join(ROOT, 'checkin.json');
+import { paths } from '../src/config.mjs';
+const FILE = paths.checkin;
 const backup = fs.existsSync(FILE) ? fs.readFileSync(FILE, 'utf8') : null;
 
 test('自动签到开关读写', () => {

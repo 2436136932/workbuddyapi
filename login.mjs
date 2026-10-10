@@ -8,7 +8,7 @@
 //   node login.mjs --site intl-cli 1800      自定义等待秒数（默认 600）
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
-import { loadConfig, paths, authPathFor, siteKeys } from './src/config.mjs';
+import { loadConfig, paths, authPathFor, siteKeys, ensureDataDir } from './src/config.mjs';
 import { jwtClaims } from './src/auth.mjs';
 import { startLogin, pollLogin } from './src/device-login.mjs';
 import { log, warn } from './src/log.mjs';
@@ -48,6 +48,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function main() {
   log(`开始登录站点 [${siteKey}] ${site.label}`);
   const { state, authUrl } = await startLogin(cfg, siteKey);
+  ensureDataDir();
   fs.writeFileSync(paths.loginState, JSON.stringify({ site: siteKey, state, authUrl, at: Date.now() }, null, 2), 'utf8');
 
   console.log('');

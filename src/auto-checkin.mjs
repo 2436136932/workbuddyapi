@@ -1,13 +1,12 @@
 // 一键签到（参考 workbuddy-switch 的产品形态：状态查询 + 一键领取 + 自动签到；
 // 上游接口形态参考 88lin/workbuddy-auto-signin，本文件为独立重写）。
-// 状态落盘 checkin.json（含各站点最近一次签到结果 + 自动签到开关），已被 .gitignore 忽略。
+// 状态落盘 data/checkin.json（含各站点最近一次签到结果 + 自动签到开关），已被 .gitignore 忽略。
 import fs from 'node:fs';
-import path from 'node:path';
-import { ROOT } from './config.mjs';
+import { paths, ensureDataDir } from './config.mjs';
 import { checkinAll } from './checkin.mjs';
 import { log } from './log.mjs';
 
-const FILE = path.join(ROOT, 'checkin.json');
+const FILE = paths.checkin;
 
 function load() {
   try {
@@ -19,6 +18,7 @@ function load() {
 
 function save(s) {
   try {
+    ensureDataDir();
     fs.writeFileSync(FILE, JSON.stringify(s, null, 2) + '\n', 'utf8');
   } catch { /* 落盘失败不影响主流程 */ }
 }

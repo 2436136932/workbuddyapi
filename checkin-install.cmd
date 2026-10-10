@@ -16,5 +16,5 @@ schtasks /create /tn "%TASK%" /tr "\"%CD%\checkin-scheduled.cmd\"" /sc daily /st
 echo.
 echo 已注册计划任务 %TASK%（每天 09:10 自动签到）。
 echo 改时间：schtasks /change /tn "%TASK%" /st HH:MM
-echo 看结果：type checkin.log
+echo 看结果：type data\checkin.log
 pause

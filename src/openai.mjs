@@ -36,7 +36,9 @@ export function normalizeChunk(obj, publicModel) {
 }
 
 export async function handleChatCompletions(ctx) {
-  const { cfg, res, body, signal } = ctx;
+  const { cfg, res, body, signal, principal } = ctx;
+  const keyId = principal?.keyId || null;
+  const keyName = principal?.name || null;
   const target = await resolveTarget(cfg, body.model);
   const { site, model } = target;
   const publicModel = target.requested;
@@ -54,6 +56,10 @@ export async function handleChatCompletions(ctx) {
   const up = await openWithRetry(cfg, site, upstreamBody, { signal });
   if (!up.ok) {
     requestLog({ site, model, mode: wantsStream ? 'stream' : 'json', status: up.status, ms: Date.now() - started, note: 'upstream_reject' });
+    recordUsage({
+      site, model, mode: wantsStream ? 'stream' : 'json', status: up.status,
+      ms: Date.now() - started, keyId, keyName,
+    });
     return sendError(res, up.status, upstreamErrorMessage(up.status, up.text, site));
   }
 
@@ -110,9 +116,11 @@ export async function handleChatCompletions(ctx) {
         ms: Date.now() - started,
         tools,
         realModel: upstreamModel,
+        keyId,
+        keyName,
       });
     }
-    return;
+    return { credit: upstreamCredit };
   }
 
   // 非流式：聚合上游 SSE 后一次性返回
@@ -121,6 +129,7 @@ export async function handleChatCompletions(ctx) {
     agg = await aggregateFrames(up.frames);
   } catch (e) {
     requestLog({ site, model, mode: 'json', status: e.status || 502, ms: Date.now() - started, note: 'aggregate_failed' });
+    recordUsage({ site, model, mode: 'json', status: e.status || 502, ms: Date.now() - started, keyId, keyName });
     return sendError(res, e.status || 502, e.message);
   } finally {
     up.close();
@@ -149,6 +158,7 @@ export async function handleChatCompletions(ctx) {
 
   if (agg.frames === 0) {
     requestLog({ site, model, mode: 'json', status: 502, ms: Date.now() - started, note: 'empty_stream' });
+    recordUsage({ site, model, mode: 'json', status: 502, ms: Date.now() - started, keyId, keyName });
     return sendError(res, 502, '上游返回空响应');
   }
 
@@ -184,6 +194,7 @@ export async function handleChatCompletions(ctx) {
     tools: agg.toolCallList.length || undefined,
   });
 
+  const credit = agg.credit || usageCredit(agg.usage);
   recordUsage({
     site,
     model,
@@ -191,9 +202,12 @@ export async function handleChatCompletions(ctx) {
     status: 200,
     promptTokens: usage.prompt_tokens,
     completionTokens: usage.completion_tokens,
-    credit: agg.credit || usageCredit(agg.usage),
+    credit,
     ms: Date.now() - started,
     tools: agg.toolCallList.length,
+    realModel: agg.model,
+    keyId,
+    keyName,
   });
 
   // 非流式没有 SSE 头，这里补上真实落点，便于客户端与排查直接看到
@@ -210,6 +224,7 @@ export async function handleChatCompletions(ctx) {
     choices: [{ index: 0, message, finish_reason: agg.finishReason || 'stop' }],
     usage,
   });
+  return { credit };
 }
 
 export async function handleModels(ctx) {
